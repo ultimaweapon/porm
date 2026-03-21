@@ -1,0 +1,32 @@
+name: Development Build
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+concurrency: ${{ github.ref }}
+jobs:
+  prebuild:
+    name: Pre-build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v6
+    - name: Check code styles
+      run: cargo fmt --check
+  build:
+    name: Build
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    needs: prebuild
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v6
+    - name: Lint
+      run: cargo clippy --workspace -- -D warnings
+    - name: Run tests
+      run: cargo test

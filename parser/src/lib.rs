@@ -149,6 +149,7 @@ fn parse_create_stmt<I, M: Migration>(
     let mut fields = FxHashMap::default();
 
     for def in defs {
+        #[allow(clippy::single_match)] // TODO: Remove this.
         match def {
             Node::ColumnDef(v) => {
                 let c = parse_column_def(v)?;
@@ -208,13 +209,12 @@ fn parse_column_def(node: ColumnDef) -> Option<Column> {
     let mut is_not_null = false;
 
     for c in node.constraints.unwrap_or_default() {
-        match c {
-            Node::Constraint(v) => match *v.contype {
+        if let Node::Constraint(v) = c {
+            match *v.contype {
                 ConstrType::CONSTR_NULL => is_not_null = false,
                 ConstrType::CONSTR_NOTNULL => is_not_null = true,
                 _ => (),
-            },
-            _ => (),
+            }
         }
     }
 

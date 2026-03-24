@@ -4,3 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+pg_parse = "0.12.0"
+proc-macro2 = "1.0.106"

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tokio-postgres = "0.7.16"
 
 [workspace]
 members = ["macros", "parser"]

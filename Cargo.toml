@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+porm-macros = { version = "=0.1.0", path = "macros" }
 tokio-postgres = "0.7.16"
 
 [workspace]

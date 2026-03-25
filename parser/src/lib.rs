@@ -6,7 +6,8 @@ use self::model::{Field, Model};
 use self::ty::Type;
 use crate::migration::Migration;
 use heck::AsUpperCamelCase;
-use pg_parse::ast::{ColumnDef, ConstrType, CreateStmt, Node};
+use pg_query::protobuf::node::Node;
+use pg_query::protobuf::{ColumnDef, ConstrType, CreateStmt};
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -46,13 +47,20 @@ where
         };
 
         // Parse migration.
-        let stmts = match pg_parse::parse(&script) {
+        let parsed = match pg_query::parse(&script) {
             Ok(v) => v,
             Err(e) => return Err(ParseError::ParseMigration(name, version, e)),
         };
 
-        for stmt in stmts {
-            let r = match stmt {
+        for stmt in parsed.protobuf.stmts {
+            // Get statement.
+            let node = match stmt.stmt.and_then(|v| v.node) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            // Process.
+            let r = match node {
                 Node::CreateStmt(n) => parse_create_stmt::<E, M>(&mut cx, &name, version, n),
                 _ => continue,
             };
@@ -138,17 +146,22 @@ fn parse_create_stmt<I, M: Migration>(
     use std::collections::hash_map::Entry;
 
     // Check table name.
-    let table = node.relation.and_then(|v| v.relname)?;
+    let table = node.relation.map(|v| v.relname)?;
 
     if table.chars().any(|c| c.is_uppercase()) {
         return Some(Err(ParseError::UnsupportedTableName(mn.clone(), mv, table)));
     }
 
     // Parse create statement.
-    let defs = node.table_elts?;
+    let defs = node.table_elts;
     let mut fields = FxHashMap::default();
 
     for def in defs {
+        let def = match def.node {
+            Some(v) => v,
+            None => continue,
+        };
+
         #[allow(clippy::single_match)] // TODO: Remove this.
         match def {
             Node::ColumnDef(v) => {
@@ -178,7 +191,7 @@ fn parse_create_stmt<I, M: Migration>(
 
                 e.insert(Field {
                     ty: c.ty,
-                    nullable: !c.is_not_null,
+                    nullable: c.nullable,
                 });
             }
             _ => (),
@@ -202,33 +215,29 @@ fn parse_create_stmt<I, M: Migration>(
     Some(Ok(()))
 }
 
-fn parse_column_def(node: ColumnDef) -> Option<Column> {
-    let name = node.colname?;
+fn parse_column_def(node: Box<ColumnDef>) -> Option<Column> {
+    let name = node.colname;
     let ty = node.type_name?;
-    let ty = ty.names.and_then(parse_column_type)?;
-    let mut is_not_null = false;
+    let ty = parse_column_type(ty.names)?;
+    let mut nullable = true;
 
-    for c in node.constraints.unwrap_or_default() {
-        if let Node::Constraint(v) = c {
-            match *v.contype {
-                ConstrType::CONSTR_NULL => is_not_null = false,
-                ConstrType::CONSTR_NOTNULL => is_not_null = true,
+    for c in node.constraints {
+        if let Some(Node::Constraint(v)) = c.node {
+            match v.contype.try_into().unwrap() {
+                ConstrType::ConstrNull => nullable = true,
+                ConstrType::ConstrNotnull => nullable = false,
                 _ => (),
             }
         }
     }
 
-    Some(Column {
-        name,
-        ty,
-        is_not_null,
-    })
+    Some(Column { name, ty, nullable })
 }
 
-fn parse_column_type(nodes: Vec<Node>) -> Option<Type> {
+fn parse_column_type(nodes: Vec<pg_query::protobuf::Node>) -> Option<Type> {
     let mut nodes = nodes.into_iter();
-    let schema = match nodes.next()? {
-        Node::String { sval } => sval?,
+    let schema = match nodes.next()?.node? {
+        Node::String(v) => v.sval,
         _ => return None,
     };
 
@@ -239,9 +248,9 @@ fn parse_column_type(nodes: Vec<Node>) -> Option<Type> {
     }
 }
 
-fn parse_system_type(node: Node) -> Option<Type> {
-    let name = match node {
-        Node::String { sval } => sval?,
+fn parse_system_type(node: pg_query::protobuf::Node) -> Option<Type> {
+    let name = match node.node? {
+        Node::String(v) => v.sval,
         _ => return None,
     };
 
@@ -267,7 +276,7 @@ where
     /// Couldn't read migration script.
     ReadMigration(Option<String>, usize, M::Err),
     /// Couldn't parse migration script.
-    ParseMigration(Option<String>, usize, pg_parse::Error),
+    ParseMigration(Option<String>, usize, pg_query::Error),
     /// Migration contains unsupported table name.
     UnsupportedTableName(Option<String>, usize, String),
     /// Migration contains duplicated table.

@@ -4,5 +4,5 @@ use crate::ty::Type;
 pub struct Column {
     pub name: String,
     pub ty: Type,
-    pub is_not_null: bool,
+    pub nullable: bool,
 }

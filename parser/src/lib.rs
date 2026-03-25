@@ -78,11 +78,13 @@ where
 
     // Write models.
     for (name, data) in cx.models {
+        let name = AsUpperCamelCase(name);
+
         writeln!(
             out,
             r#"
 pub struct {} {{"#,
-            AsUpperCamelCase(name)
+            name
         )
         .map_err(ParseError::WriteCode)?;
 
@@ -97,6 +99,10 @@ pub struct {} {{"#,
         }
 
         writeln!(out, r#"}}"#).map_err(ParseError::WriteCode)?;
+
+        // Write inherent implementation.
+        writeln!(out, "\nimpl {} {{", name).map_err(ParseError::WriteCode)?;
+        writeln!(out, "}}").map_err(ParseError::WriteCode)?;
     }
 
     // Write migrations.
@@ -236,13 +242,14 @@ fn parse_column_def(node: Box<ColumnDef>) -> Option<Column> {
 
 fn parse_column_type(nodes: Vec<pg_query::protobuf::Node>) -> Option<Type> {
     let mut nodes = nodes.into_iter();
-    let schema = match nodes.next()?.node? {
+    let name = match nodes.next()?.node? {
         Node::String(v) => v.sval,
         _ => return None,
     };
 
-    match schema.as_str() {
+    match name.as_str() {
         "pg_catalog" => nodes.next().and_then(parse_system_type),
+        "serial" => Some(Type::Serial),
         "text" => Some(Type::Text),
         _ => None,
     }
@@ -417,8 +424,8 @@ mod tests {
         // Parse.
         let mut out = Vec::new();
         let migrations = StrProvider::new([
-            "CREATE TABLE foo (foo integer NOT NULL);CREATE TABLE bar (bar text);",
-            "CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+            "CREATE TABLE foo (key serial NOT NULL, PRIMARY KEY (key));",
+            "CREATE TABLE bar (bar text);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
         ]);
 
         parse(&mut out, migrations).unwrap();
@@ -431,25 +438,34 @@ mod tests {
             r#"use porm::migration::Migration;
 
 pub struct Foo {
-    pub foo: i32,
+    pub key: i32,
+}
+
+impl Foo {
 }
 
 pub struct Bar {
     pub bar: Option<String>,
 }
 
+impl Bar {
+}
+
 pub struct FooBar {
     pub baz: Option<::std::time::SystemTime>,
+}
+
+impl FooBar {
 }
 
 pub static MIGRATIONS: [Migration; 2] = [
     Migration {
         name: None,
-        script: "CREATE TABLE foo (foo integer NOT NULL);CREATE TABLE bar (bar text);",
+        script: "CREATE TABLE foo (key serial NOT NULL, PRIMARY KEY (key));",
     },
     Migration {
         name: None,
-        script: "CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+        script: "CREATE TABLE bar (bar text);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
     },
 ];
 "#

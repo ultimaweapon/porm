@@ -6,6 +6,7 @@ use self::model::{Field, Model};
 use self::ty::Type;
 use crate::migration::Migration;
 use heck::AsUpperCamelCase;
+use indexmap::IndexMap;
 use pg_query::protobuf::node::Node;
 use pg_query::protobuf::{ColumnDef, ConstrType, CreateStmt};
 use proc_macro2::Literal;
@@ -74,11 +75,16 @@ where
     }
 
     // Generate preamble.
-    writeln!(out, r#"use porm::migration::Migration;"#).map_err(ParseError::WriteCode)?;
+    writeln!(
+        out,
+        r#"use porm::migration::Migration;
+use tokio_postgres::{{Error, GenericClient}};"#
+    )
+    .map_err(ParseError::WriteCode)?;
 
     // Write models.
-    for (name, data) in cx.models {
-        let name = AsUpperCamelCase(name);
+    for (table, data) in cx.models {
+        let name = AsUpperCamelCase(&table);
 
         writeln!(
             out,
@@ -88,7 +94,7 @@ pub struct {} {{"#,
         )
         .map_err(ParseError::WriteCode)?;
 
-        for (name, data) in data.fields {
+        for (name, data) in &data.fields {
             write!(out, r#"    pub {}: "#, name).map_err(ParseError::WriteCode)?;
 
             if data.nullable {
@@ -99,9 +105,48 @@ pub struct {} {{"#,
         }
 
         writeln!(out, r#"}}"#).map_err(ParseError::WriteCode)?;
-
-        // Write inherent implementation.
         writeln!(out, "\nimpl {} {{", name).map_err(ParseError::WriteCode)?;
+
+        // Write insert method.
+        write!(
+            out,
+            r#"    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {{
+        client.execute("INSERT INTO {} ("#,
+            table
+        )
+        .map_err(ParseError::WriteCode)?;
+
+        for (i, name) in data.fields.keys().enumerate() {
+            if i == 0 {
+                write!(out, "{name}").map_err(ParseError::WriteCode)?;
+            } else {
+                write!(out, ", {name}").map_err(ParseError::WriteCode)?;
+            }
+        }
+
+        write!(out, ") VALUES (").map_err(ParseError::WriteCode)?;
+
+        for (i, n) in (1..=data.fields.len()).enumerate() {
+            if i == 0 {
+                write!(out, "${n}").map_err(ParseError::WriteCode)?;
+            } else {
+                write!(out, ", ${n}").map_err(ParseError::WriteCode)?;
+            }
+        }
+
+        write!(out, r#")", &["#).map_err(ParseError::WriteCode)?;
+
+        for (i, name) in data.fields.keys().enumerate() {
+            if i == 0 {
+                write!(out, "&self.{name}").map_err(ParseError::WriteCode)?;
+            } else {
+                write!(out, ", &self.{name}").map_err(ParseError::WriteCode)?;
+            }
+        }
+
+        writeln!(out, r#"]).await?;"#).map_err(ParseError::WriteCode)?;
+        writeln!(out, "        Ok(())").map_err(ParseError::WriteCode)?;
+        writeln!(out, "    }}").map_err(ParseError::WriteCode)?;
         writeln!(out, "}}").map_err(ParseError::WriteCode)?;
     }
 
@@ -160,7 +205,7 @@ fn parse_create_stmt<I, M: Migration>(
 
     // Parse create statement.
     let defs = node.table_elts;
-    let mut fields = FxHashMap::default();
+    let mut fields = IndexMap::new();
 
     for def in defs {
         let def = match def.node {
@@ -171,6 +216,9 @@ fn parse_create_stmt<I, M: Migration>(
         #[allow(clippy::single_match)] // TODO: Remove this.
         match def {
             Node::ColumnDef(v) => {
+                use indexmap::map::Entry;
+
+                // Check column name.
                 let c = parse_column_def(v)?;
 
                 if c.name.chars().any(|c| c.is_uppercase()) {
@@ -263,6 +311,7 @@ fn parse_system_type(node: pg_query::protobuf::Node) -> Option<Type> {
 
     match name.as_str() {
         "int4" => Some(Type::Integer),
+        "int8" => Some(Type::BigInt),
         "timestamptz" => Some(Type::TimestampWithTz),
         _ => None,
     }
@@ -424,7 +473,7 @@ mod tests {
         // Parse.
         let mut out = Vec::new();
         let migrations = StrProvider::new([
-            "CREATE TABLE foo (key serial NOT NULL, PRIMARY KEY (key));",
+            "CREATE TABLE foo (key serial NOT NULL, value bigint, PRIMARY KEY (key));",
             "CREATE TABLE bar (bar text);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
         ]);
 
@@ -436,12 +485,18 @@ mod tests {
         assert_eq!(
             out,
             r#"use porm::migration::Migration;
+use tokio_postgres::{Error, GenericClient};
 
 pub struct Foo {
     pub key: i32,
+    pub value: Option<i64>,
 }
 
 impl Foo {
+    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+        client.execute("INSERT INTO foo (key, value) VALUES ($1, $2)", &[&self.key, &self.value]).await?;
+        Ok(())
+    }
 }
 
 pub struct Bar {
@@ -449,6 +504,10 @@ pub struct Bar {
 }
 
 impl Bar {
+    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+        client.execute("INSERT INTO bar (bar) VALUES ($1)", &[&self.bar]).await?;
+        Ok(())
+    }
 }
 
 pub struct FooBar {
@@ -456,12 +515,16 @@ pub struct FooBar {
 }
 
 impl FooBar {
+    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+        client.execute("INSERT INTO foo_bar (baz) VALUES ($1)", &[&self.baz]).await?;
+        Ok(())
+    }
 }
 
 pub static MIGRATIONS: [Migration; 2] = [
     Migration {
         name: None,
-        script: "CREATE TABLE foo (key serial NOT NULL, PRIMARY KEY (key));",
+        script: "CREATE TABLE foo (key serial NOT NULL, value bigint, PRIMARY KEY (key));",
     },
     Migration {
         name: None,

@@ -1,9 +1,9 @@
 use crate::ty::Type;
-use rustc_hash::FxHashMap;
+use indexmap::IndexMap;
 
 /// Contains information for a model.
 pub struct Model {
-    pub fields: FxHashMap<String, Field>,
+    pub fields: IndexMap<String, Field>,
 }
 
 /// Contains information for a field in model.

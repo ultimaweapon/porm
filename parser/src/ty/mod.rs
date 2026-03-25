@@ -1,5 +1,3 @@
-use std::fmt::{Display, Formatter};
-
 /// Data type on PostgreSQL.
 pub enum Type {
     BigInt,
@@ -9,13 +7,52 @@ pub enum Type {
     TimestampWithTz,
 }
 
-impl Display for Type {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl Type {
+    pub fn for_field(&self) -> &'static str {
         match self {
-            Self::BigInt => f.write_str("i64"),
-            Self::Integer | Self::Serial => f.write_str("i32"),
-            Self::Text => f.write_str("String"),
-            Self::TimestampWithTz => f.write_str("::std::time::SystemTime"),
+            Self::BigInt => "i64",
+            Self::Integer | Self::Serial => "i32",
+            Self::Text => "Cow<'a, str>",
+            Self::TimestampWithTz => "SystemTime",
+        }
+    }
+
+    pub fn for_param(&self) -> &'static str {
+        match self {
+            Self::BigInt => "i64",
+            Self::Integer | Self::Serial => "i32",
+            Self::Text => "&str",
+            Self::TimestampWithTz => "&SystemTime",
+        }
+    }
+
+    pub fn for_retrieve(&self) -> &'static str {
+        match self {
+            Self::BigInt => "i64",
+            Self::Integer => "i32",
+            Self::Serial => "i32",
+            Self::Text => "String",
+            Self::TimestampWithTz => "SystemTime",
+        }
+    }
+
+    pub fn pass_by_ref(&self) -> bool {
+        match self {
+            Self::BigInt => true,
+            Self::Integer => true,
+            Self::Serial => true,
+            Self::Text => true,
+            Self::TimestampWithTz => false,
+        }
+    }
+
+    pub fn is_cow(&self) -> bool {
+        match self {
+            Self::BigInt => false,
+            Self::Integer => false,
+            Self::Serial => false,
+            Self::Text => true,
+            Self::TimestampWithTz => false,
         }
     }
 }

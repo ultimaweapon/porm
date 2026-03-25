@@ -6,7 +6,7 @@ fn parse_with_valid() {
     // Parse.
     let mut out = Vec::new();
     let migrations = StrProvider::new([
-        "CREATE TABLE foo (key serial NOT NULL, value bigint, PRIMARY KEY (key));",
+        "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
         "CREATE TABLE bar (bar text);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
     ]);
 
@@ -18,25 +18,42 @@ fn parse_with_valid() {
     assert_eq!(
         out,
         r#"use porm::migration::Migration;
+use std::borrow::Cow;
+use std::time::SystemTime;
 use tokio_postgres::{Error, GenericClient};
 
-pub struct Foo {
+pub struct Foo<'a> {
     pub key: i32,
     pub value: Option<i64>,
+    pub desc: Option<Cow<'a, str>>,
 }
 
-impl Foo {
+impl<'a> Foo<'a> {
     pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
-        client.execute("INSERT INTO foo (key, value) VALUES ($1, $2)", &[&self.key, &self.value]).await?;
+        client.execute("INSERT INTO foo (key, value, desc) VALUES ($1, $2, $3)", &[&self.key, &self.value, &self.desc]).await?;
         Ok(())
+    }
+
+    pub async fn select<T: GenericClient>(client: &T, key: i32) -> Result<Option<Self>, Error> {
+        let r = client.query_opt("SELECT * FROM foo WHERE key = $1", &[&key]).await?;
+        let r = match r {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let key = r.try_get::<_, i32>("key")?;
+        let value = r.try_get::<_, Option<i64>>("value")?;
+        let desc = r.try_get::<_, Option<String>>("desc")?;
+
+        Ok(Some(Self { key, value, desc: desc.map(Cow::Owned) }))
     }
 }
 
-pub struct Bar {
-    pub bar: Option<String>,
+pub struct Bar<'a> {
+    pub bar: Option<Cow<'a, str>>,
 }
 
-impl Bar {
+impl<'a> Bar<'a> {
     pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
         client.execute("INSERT INTO bar (bar) VALUES ($1)", &[&self.bar]).await?;
         Ok(())
@@ -44,7 +61,7 @@ impl Bar {
 }
 
 pub struct FooBar {
-    pub baz: Option<::std::time::SystemTime>,
+    pub baz: Option<SystemTime>,
 }
 
 impl FooBar {
@@ -57,7 +74,7 @@ impl FooBar {
 pub static MIGRATIONS: [Migration; 2] = [
     Migration {
         name: None,
-        script: "CREATE TABLE foo (key serial NOT NULL, value bigint, PRIMARY KEY (key));",
+        script: "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
     },
     Migration {
         name: None,

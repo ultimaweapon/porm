@@ -1,9 +1,32 @@
 use crate::ty::Type;
 use indexmap::IndexMap;
+use pg_query::NodeEnum;
+use pg_query::protobuf::{ConstrType, Constraint};
 
 /// Contains information for a model.
+#[derive(Default)]
 pub struct Model {
     pub fields: IndexMap<String, Field>,
+    pub primary_key: Vec<String>,
+    pub has_lifetime: bool,
+}
+
+impl Model {
+    pub fn parse_table_constraint(&mut self, node: Box<Constraint>) {
+        let ty = node.contype.try_into().unwrap();
+
+        match ty {
+            ConstrType::ConstrPrimary => {
+                for c in node.keys {
+                    match c.node.unwrap() {
+                        NodeEnum::String(v) => self.primary_key.push(v.sval),
+                        _ => continue,
+                    };
+                }
+            }
+            _ => (),
+        }
+    }
 }
 
 /// Contains information for a field in model.

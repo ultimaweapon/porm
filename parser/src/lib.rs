@@ -1,6 +1,8 @@
 //! Parse SQL migration scripts and generate models from it.
 //!
 //! Usually this will be used from build script.
+pub use self::error::*;
+
 use self::column::Column;
 use self::model::{Field, Model};
 use self::ty::Type;
@@ -11,12 +13,12 @@ use pg_query::protobuf::node::Node;
 use pg_query::protobuf::{ColumnDef, ConstrType, CreateStmt};
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
-use std::fmt::{Debug, Display, Formatter};
 use std::io::Write;
 
 pub mod migration;
 
 mod column;
+mod error;
 mod model;
 #[cfg(test)]
 mod tests;
@@ -322,145 +324,4 @@ fn parse_system_type(node: pg_query::protobuf::Node) -> Option<Type> {
 /// Context to parse migration scripts.
 struct Context {
     models: FxHashMap<String, Model>,
-}
-
-/// Reason why [parse()] fails.
-pub enum ParseError<I, M>
-where
-    M: Migration,
-{
-    /// Couldn't get migration.
-    GetMigration(usize, I),
-    /// Couldn't read migration script.
-    ReadMigration(Option<String>, usize, M::Err),
-    /// Couldn't parse migration script.
-    ParseMigration(Option<String>, usize, pg_query::Error),
-    /// Migration contains unsupported table name.
-    UnsupportedTableName(Option<String>, usize, String),
-    /// Migration contains duplicated table.
-    DuplicatedTable(Option<String>, usize, String),
-    /// Migration contains unsupported column name.
-    UnsupportedColumnName(Option<String>, usize, String, String),
-    /// Migration contains duplicated column.
-    DuplicatedColumn(Option<String>, usize, String, String),
-    /// Couldn't write generated code.
-    WriteCode(std::io::Error),
-}
-
-impl<I, M> std::error::Error for ParseError<I, M>
-where
-    I: std::error::Error + 'static,
-    M: Migration,
-{
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::GetMigration(_, e) => Some(e),
-            Self::ReadMigration(_, _, e) => Some(e),
-            Self::ParseMigration(_, _, e) => Some(e),
-            Self::WriteCode(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl<I, M> Display for ParseError<I, M>
-where
-    M: Migration,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::GetMigration(v, _) => write!(f, "couldn't get migration for version {v}"),
-            Self::ReadMigration(n, v, _) => match n {
-                Some(n) => write!(f, "couldn't read migration script '{n}'"),
-                None => write!(f, "couldn't read migration script for version {v}"),
-            },
-            Self::ParseMigration(n, v, _) => match n {
-                Some(n) => write!(f, "couldn't parse migration script '{n}'"),
-                None => write!(f, "couldn't parse migration script for version {v}"),
-            },
-            Self::UnsupportedTableName(n, v, t) => match n {
-                Some(n) => write!(f, "table name '{t}' on migration '{n}' is not supported"),
-                None => write!(
-                    f,
-                    "table name '{t}' on migration version {v} is not supported"
-                ),
-            },
-            Self::DuplicatedTable(n, v, t) => match n {
-                Some(n) => write!(f, "duplicated table '{t}' on migration '{n}'"),
-                None => write!(f, "duplicated table '{t}' on migration version '{v}'"),
-            },
-            Self::UnsupportedColumnName(n, v, t, c) => match n {
-                Some(n) => write!(
-                    f,
-                    "unsupported column name '{c}' in table '{t}' on migration '{n}'"
-                ),
-                None => write!(
-                    f,
-                    "unsupported column name '{c}' in table '{t}' on migration version {v}"
-                ),
-            },
-            Self::DuplicatedColumn(n, v, t, c) => match n {
-                Some(n) => write!(
-                    f,
-                    "duplicated column '{c}' in table '{t}' on migration '{n}'"
-                ),
-                None => write!(
-                    f,
-                    "duplicated column '{c}' in table '{t}' on migration version {v}"
-                ),
-            },
-            Self::WriteCode(_) => f.write_str("couldn't write generated code"),
-        }
-    }
-}
-
-impl<I, M> Debug for ParseError<I, M>
-where
-    I: Debug,
-    M: Migration,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::GetMigration(v, e) => f.debug_tuple("GetMigration").field(v).field(e).finish(),
-            Self::ReadMigration(n, v, e) => f
-                .debug_tuple("ReadMigration")
-                .field(n)
-                .field(v)
-                .field(e)
-                .finish(),
-            Self::ParseMigration(n, v, e) => f
-                .debug_tuple("ParseMigration")
-                .field(n)
-                .field(v)
-                .field(e)
-                .finish(),
-            Self::UnsupportedTableName(n, v, t) => f
-                .debug_tuple("UnsupportedTableName")
-                .field(n)
-                .field(v)
-                .field(t)
-                .finish(),
-            Self::DuplicatedTable(n, v, t) => f
-                .debug_tuple("DuplicatedTable")
-                .field(n)
-                .field(v)
-                .field(t)
-                .finish(),
-            Self::UnsupportedColumnName(n, v, t, c) => f
-                .debug_tuple("UnsupportedColumnName")
-                .field(n)
-                .field(v)
-                .field(t)
-                .field(c)
-                .finish(),
-            Self::DuplicatedColumn(n, v, t, c) => f
-                .debug_tuple("DuplicatedColumn")
-                .field(n)
-                .field(v)
-                .field(t)
-                .field(c)
-                .finish(),
-            Self::WriteCode(e) => f.debug_tuple("WriteCode").field(e).finish(),
-        }
-    }
 }

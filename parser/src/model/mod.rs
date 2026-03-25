@@ -15,6 +15,7 @@ impl Model {
     pub fn parse_table_constraint(&mut self, node: Box<Constraint>) {
         let ty = node.contype.try_into().unwrap();
 
+        #[allow(clippy::single_match)] // TODO: Remove this.
         match ty {
             ConstrType::ConstrPrimary => {
                 for c in node.keys {

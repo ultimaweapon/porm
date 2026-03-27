@@ -4,9 +4,10 @@
 pub use self::error::*;
 
 use self::column::Column;
+use self::migration::Migration;
 use self::model::{Field, Model};
 use self::ty::Type;
-use crate::migration::Migration;
+use self::writer::Writer;
 use heck::AsUpperCamelCase;
 use pg_query::protobuf::node::Node;
 use pg_query::protobuf::{ColumnDef, ConstrType, CreateStmt};
@@ -22,6 +23,7 @@ mod model;
 #[cfg(test)]
 mod tests;
 mod ty;
+mod writer;
 
 /// Parse SQL migration scripts and generate models from it.
 ///
@@ -216,209 +218,236 @@ fn parse_system_type(node: pg_query::protobuf::Node) -> Option<Type> {
 fn generate(
     cx: Context,
     migrations: Vec<(Option<String>, String)>,
-    mut out: impl Write,
+    out: impl Write,
 ) -> Result<(), std::io::Error> {
     // Generate preamble.
-    writeln!(out, "use porm::migration::Migration;")?;
-    writeln!(out, "use std::borrow::Cow;")?;
-    writeln!(out, "use std::time::SystemTime;")?;
-    writeln!(out, "use tokio_postgres::{{Error, GenericClient}};")?;
+    let mut w = Writer::new(out);
+
+    w.line("use porm::migration::Migration;")?;
+    w.line("use std::borrow::Cow;")?;
+    w.line("use std::time::SystemTime;")?;
+    w.line("use tokio_postgres::{Error, GenericClient};")?;
 
     // Write models.
     for (table, model) in cx.models {
         let name = AsUpperCamelCase(&table);
 
-        writeln!(out)?;
-        write!(out, r#"pub struct {}"#, name)?;
+        w.blank_line()?;
+        w.begin(format_args!(r#"pub struct {}"#, name))?;
 
         if model.has_lifetime {
-            writeln!(out, "<'a> {{")?;
+            w.end("<'a> {")?;
         } else {
-            writeln!(out, " {{")?;
+            w.end(" {")?;
         }
+
+        w.increase_indent();
 
         for (c, f) in &model.fields {
-            write!(out, r#"    pub {}: "#, c)?;
+            w.begin(format_args!(r#"pub {c}: "#))?;
 
             if f.nullable {
-                writeln!(out, r#"Option<{}>,"#, f.ty.for_field())?;
+                w.end(format_args!(r#"Option<{}>,"#, f.ty.for_field()))?;
             } else {
-                writeln!(out, r#"{},"#, f.ty.for_field())?;
+                w.end(format_args!(r#"{},"#, f.ty.for_field()))?;
             }
         }
 
-        writeln!(out, r#"}}"#)?;
+        w.decrease_indent();
+        w.line(r#"}"#)?;
+        w.blank_line()?;
 
         if model.has_lifetime {
-            writeln!(out, "\nimpl<'a> {}<'a> {{", name)?;
+            w.line(format_args!("impl<'a> {name}<'a> {{"))?;
         } else {
-            writeln!(out, "\nimpl {} {{", name)?;
+            w.line(format_args!("impl {name} {{"))?;
         }
+
+        w.increase_indent();
 
         // Write insert method.
-        writeln!(
-            out,
-            "    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {{",
-        )?;
-        write!(out, r#"        client.execute("INSERT INTO {table} ("#)?;
+        w.line("pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {")?;
+
+        w.increase_indent();
+        w.begin(format_args!(r#"client.execute("INSERT INTO {table} ("#))?;
 
         for (i, c) in model.fields.keys().enumerate() {
-            if i == 0 {
-                write!(out, "{c}")?;
-            } else {
-                write!(out, ", {c}")?;
+            if i != 0 {
+                w.append(", ")?;
             }
+
+            w.append(format_args!("{c}"))?;
         }
 
-        write!(out, ") VALUES (")?;
+        w.append(") VALUES (")?;
 
         for (i, n) in (1..=model.fields.len()).enumerate() {
-            if i == 0 {
-                write!(out, "${n}")?;
-            } else {
-                write!(out, ", ${n}")?;
+            if i != 0 {
+                w.append(", ")?;
             }
+
+            w.append(format_args!("${n}"))?;
         }
 
-        write!(out, r#")", &["#)?;
+        w.append(r#")", &["#)?;
 
         for (i, c) in model.fields.keys().enumerate() {
-            if i == 0 {
-                write!(out, "&self.{c}")?;
-            } else {
-                write!(out, ", &self.{c}")?;
+            if i != 0 {
+                w.append(", ")?;
             }
+
+            w.append(format_args!("&self.{c}"))?;
         }
 
-        writeln!(out, r#"]).await?;"#)?;
-        writeln!(out, "        Ok(())")?;
-        writeln!(out, "    }}")?;
+        w.end(r#"]).await?;"#)?;
+
+        w.line("Ok(())")?;
+        w.decrease_indent();
+
+        w.line("}")?;
 
         // Write select method.
         if !model.primary_key.is_empty() {
-            writeln!(out)?;
-            write!(out, "    pub async fn select<T: GenericClient>(client: &T")?;
+            w.blank_line()?;
+            w.begin("pub async fn select<T: GenericClient>(client: &T")?;
 
             for c in &model.primary_key {
                 let f = model.fields.get(c).unwrap();
 
                 if f.nullable {
-                    write!(out, ", {}: Option<{}>", c, f.ty.for_param())?;
+                    w.append(format_args!(", {}: Option<{}>", c, f.ty.for_param()))?;
                 } else {
-                    write!(out, ", {}: {}", c, f.ty.for_param())?;
+                    w.append(format_args!(", {}: {}", c, f.ty.for_param()))?;
                 }
             }
 
-            writeln!(out, ") -> Result<Option<Self>, Error> {{")?;
-            write!(
-                out,
-                r#"        let r = client.query_opt("SELECT * FROM {} WHERE "#,
+            w.end(") -> Result<Option<Self>, Error> {")?;
+
+            w.increase_indent();
+            w.begin(format_args!(
+                r#"let r = client.query_opt("SELECT * FROM {} WHERE "#,
                 table
-            )?;
+            ))?;
 
             for (i, c) in model.primary_key.iter().enumerate() {
                 if i != 0 {
-                    write!(out, "AND ")?;
+                    w.append("AND ")?;
                 }
 
-                write!(out, "{} = ${}", c, i + 1)?;
+                w.append(format_args!("{} = ${}", c, i + 1))?;
             }
 
-            write!(out, r#"", &["#)?;
+            w.append(r#"", &["#)?;
 
             for (i, c) in model.primary_key.iter().enumerate() {
                 let f = model.fields.get(c).unwrap();
 
                 if i != 0 {
-                    write!(out, ", ")?;
+                    w.append(", ")?;
                 }
 
                 if f.nullable || f.ty.pass_by_ref() {
-                    write!(out, "&{c}")?;
+                    w.append(format_args!("&{c}"))?;
                 } else {
-                    write!(out, "{c}")?;
+                    w.append(format_args!("{c}"))?;
                 }
             }
 
-            writeln!(out, "]).await?;")?;
-            writeln!(out, "        let r = match r {{")?;
-            writeln!(out, "            Some(v) => v,")?;
-            writeln!(out, "            None => return Ok(None),")?;
-            writeln!(out, "        }};")?;
-            writeln!(out)?;
+            w.end("]).await?;")?;
+            w.line("let r = match r {")?;
+
+            w.increase_indent();
+            w.line("Some(v) => v,")?;
+            w.line("None => return Ok(None),")?;
+            w.decrease_indent();
+
+            w.line("};")?;
+            w.blank_line()?;
 
             for (c, f) in &model.fields {
                 if f.nullable {
-                    writeln!(
-                        out,
-                        r#"        let {} = r.try_get::<_, Option<{}>>("{}")?;"#,
+                    w.line(format_args!(
+                        r#"let {} = r.try_get::<_, Option<{}>>("{}")?;"#,
                         c,
                         f.ty.for_retrieve(),
                         c
-                    )?;
+                    ))?;
                 } else {
-                    writeln!(
-                        out,
-                        r#"        let {} = r.try_get::<_, {}>("{}")?;"#,
+                    w.line(format_args!(
+                        r#"let {} = r.try_get::<_, {}>("{}")?;"#,
                         c,
                         f.ty.for_retrieve(),
                         c
-                    )?;
+                    ))?;
                 }
             }
 
-            writeln!(out)?;
-            write!(out, r#"        Ok(Some(Self {{ "#)?;
+            w.blank_line()?;
+            w.begin(r#"Ok(Some(Self { "#)?;
 
             for (i, (n, f)) in model.fields.iter().enumerate() {
                 if i != 0 {
-                    write!(out, ", ")?;
+                    w.append(", ")?;
                 }
 
                 if f.ty.is_cow() {
                     if f.nullable {
-                        write!(out, "{n}: {n}.map(Cow::Owned)")?;
+                        w.append(format_args!("{n}: {n}.map(Cow::Owned)"))?;
                     } else {
-                        write!(out, "{n}: Cow::Owned({n})")?;
+                        w.append(format_args!("{n}: Cow::Owned({n})"))?;
                     }
                 } else {
-                    write!(out, "{n}")?;
+                    w.append(format_args!("{n}"))?;
                 }
             }
 
-            writeln!(out, " }}))")?;
-            writeln!(out, "    }}")?;
+            w.end(" }))")?;
+            w.decrease_indent();
+
+            w.line("}")?;
         }
 
-        writeln!(out, "}}")?;
+        w.decrease_indent();
+        w.line("}")?;
     }
 
     // Write migrations.
-    writeln!(out)?;
-    writeln!(
-        out,
+    w.blank_line()?;
+
+    w.line(format_args!(
         r#"pub static MIGRATIONS: [Migration; {}] = ["#,
         migrations.len()
-    )?;
+    ))?;
+
+    w.increase_indent();
 
     for (name, script) in migrations {
         match name {
             Some(name) => {
-                writeln!(out, "    Migration {{",)?;
-                writeln!(out, "        name: Some({}),", Literal::string(&name))?;
-                writeln!(out, "        script: {},", Literal::string(&script))?;
-                writeln!(out, "    }},")?;
+                w.line("Migration {")?;
+
+                w.increase_indent();
+                w.line(format_args!("name: Some({}),", Literal::string(&name)))?;
+                w.line(format_args!("script: {},", Literal::string(&script)))?;
+                w.decrease_indent();
+
+                w.line("},")?;
             }
             None => {
-                writeln!(out, "    Migration {{",)?;
-                writeln!(out, "        name: None,")?;
-                writeln!(out, "        script: {},", Literal::string(&script))?;
-                writeln!(out, "    }},")?;
+                w.line("Migration {")?;
+
+                w.increase_indent();
+                w.line("name: None,")?;
+                w.line(format_args!("script: {},", Literal::string(&script)))?;
+                w.decrease_indent();
+
+                w.line("},")?;
             }
         }
     }
 
-    writeln!(out, "];")?;
+    w.decrease_indent();
+    w.line("];")?;
 
     Ok(())
 }

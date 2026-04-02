@@ -1,6 +1,6 @@
 //! Parse SQL migration scripts and generate models from it.
 //!
-//! Usually this will be used from build script.
+//! Usually this crate will be used from build script.
 pub use self::error::*;
 
 use self::column::Column;
@@ -13,7 +13,10 @@ use pg_query::protobuf::node::Node;
 use pg_query::protobuf::{ColumnDef, ConstrType, CreateStmt};
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
-use std::io::Write;
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::{MAIN_SEPARATOR, Path};
 
 pub mod migration;
 
@@ -25,16 +28,90 @@ mod tests;
 mod ty;
 mod writer;
 
+/// Parse SQL migration scripts in directory `migrations` and generate models from it.
+///
+/// `f` will be used to get migration identifier from its path. The order of parsing will be
+/// determine by migration identifier produced by this function.
+///
+/// Files in nested directories or extension other than `sql` will be ignored.
+///
+/// This will set environment variable `PORM_GENERATED_FILE` to the generated file. It also emit
+/// `cargo::rerun-if-changed` for `migrations`.
+///
+/// # Panics
+/// If `f` returns a duplicated identifier.
+pub fn parse_for_build_script<M, K>(
+    migrations: impl AsRef<str>,
+    mut f: impl FnMut(&Path) -> Result<K, Box<dyn std::error::Error>>,
+) -> Result<(), ParseError>
+where
+    M: Migration,
+    K: Ord,
+{
+    // List all SQL files.
+    let migrations = migrations.as_ref();
+    let mut files = BTreeMap::new();
+
+    println!("cargo::rerun-if-changed={migrations}");
+
+    for e in std::fs::read_dir(migrations).map_err(ParseError::ReadDirectory)? {
+        // Skip if directory.
+        let e = e.map_err(ParseError::ReadDirectory)?;
+        let t = e.file_type().map_err(ParseError::ReadDirectory)?;
+
+        if t.is_dir() {
+            continue;
+        }
+
+        // Skip if not SQL file.
+        let p = e.path();
+
+        if p.extension().is_none_or(|v| !v.eq_ignore_ascii_case("sql")) {
+            continue;
+        }
+
+        // Get key.
+        let k = match f(&p) {
+            Ok(v) => v,
+            Err(e) => return Err(ParseError::GetMigrationId(p, e)),
+        };
+
+        assert!(files.insert(k, p).is_none());
+    }
+
+    // Build path to output file.
+    let mut path = std::env::var("OUT_DIR").map_err(ParseError::GetOutputDir)?;
+
+    path.push(MAIN_SEPARATOR);
+    path.push_str("models.rs");
+
+    // Create output file.
+    let mut out = match File::create(&path) {
+        Ok(v) => BufWriter::new(v),
+        Err(e) => return Err(ParseError::WriteCode(e)),
+    };
+
+    // Parse.
+    let files = files.into_values();
+
+    parse(&mut out, files)?;
+
+    out.flush().map_err(ParseError::WriteCode)?;
+
+    // Set PORM_GENERATED_FILE.
+    println!("cargo::rustc-env=PORM_GENERATED_FILE={path}");
+
+    Ok(())
+}
+
 /// Parse SQL migration scripts and generate models from it.
 ///
 /// The order of items produced by `migrations` must be the same every time.
-pub fn parse<M, E>(
-    out: impl Write,
-    migrations: impl IntoIterator<Item = Result<M, E>>,
-) -> Result<(), ParseError<E, M>>
+///
+/// Use [parse_for_build_script()] instead if you are calling from build.rs.
+pub fn parse<M>(out: impl Write, migrations: impl IntoIterator<Item = M>) -> Result<(), ParseError>
 where
     M: Migration,
-    E: std::error::Error,
 {
     // Load migrations.
     let scripts = migrations.into_iter();
@@ -45,7 +122,6 @@ where
 
     for (version, migration) in scripts.enumerate() {
         // Get migration.
-        let migration = migration.map_err(|e| ParseError::GetMigration(version, e))?;
         let name = migration.name();
         let script = match migration.read() {
             Ok(v) => v,
@@ -67,7 +143,7 @@ where
 
             // Process.
             let r = match node {
-                Node::CreateStmt(n) => parse_create_stmt::<E, M>(&mut cx, &name, version, n),
+                Node::CreateStmt(n) => parse_create_stmt(&mut cx, &name, version, n),
                 _ => continue,
             };
 
@@ -82,12 +158,12 @@ where
     generate(cx, migrations, out).map_err(ParseError::WriteCode)
 }
 
-fn parse_create_stmt<I, M: Migration>(
+fn parse_create_stmt(
     cx: &mut Context,
     mn: &Option<String>,
     mv: usize,
     node: CreateStmt,
-) -> Option<Result<(), ParseError<I, M>>> {
+) -> Option<Result<(), ParseError>> {
     use std::collections::hash_map::Entry;
 
     // Check table name.

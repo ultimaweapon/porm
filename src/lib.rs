@@ -5,4 +5,6 @@ pub mod migration;
 ///
 /// This will pull generated models into the calling module. This also pull migration list to be
 /// used with [migrate](crate::migration::migrate()).
+///
+/// Environment variable `PORM_GENERATED_FILE` must be set to the generated file.
 pub use porm_macros::include_models;

@@ -1,15 +1,18 @@
-use crate::migration::Migration;
+use std::env::VarError;
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::Deref;
+use std::path::PathBuf;
 
 /// Reason why [crate::parse()] fails.
-pub enum ParseError<I, M>
-where
-    M: Migration,
-{
-    /// Couldn't get migration.
-    GetMigration(usize, I),
+pub enum ParseError {
+    /// Couldn't read directory.
+    ReadDirectory(std::io::Error),
+    /// Couldn't get migration identifier from file path.
+    GetMigrationId(PathBuf, Box<dyn std::error::Error>),
+    /// Failed to get environment variable `OUT_DIR`.
+    GetOutputDir(VarError),
     /// Couldn't read migration script.
-    ReadMigration(Option<String>, usize, M::Err),
+    ReadMigration(Option<String>, usize, Box<dyn std::error::Error>),
     /// Couldn't parse migration script.
     ParseMigration(Option<String>, usize, pg_query::Error),
     /// Migration contains unsupported table name.
@@ -24,15 +27,13 @@ where
     WriteCode(std::io::Error),
 }
 
-impl<I, M> std::error::Error for ParseError<I, M>
-where
-    I: std::error::Error + 'static,
-    M: Migration,
-{
+impl std::error::Error for ParseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::GetMigration(_, e) => Some(e),
-            Self::ReadMigration(_, _, e) => Some(e),
+            Self::ReadDirectory(e) => Some(e),
+            Self::GetMigrationId(_, e) => Some(e.deref()),
+            Self::GetOutputDir(e) => Some(e),
+            Self::ReadMigration(_, _, e) => Some(e.deref()),
             Self::ParseMigration(_, _, e) => Some(e),
             Self::WriteCode(e) => Some(e),
             _ => None,
@@ -40,13 +41,14 @@ where
     }
 }
 
-impl<I, M> Display for ParseError<I, M>
-where
-    M: Migration,
-{
+impl Display for ParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GetMigration(v, _) => write!(f, "couldn't get migration for version {v}"),
+            Self::ReadDirectory(_) => f.write_str("couldn't read directory"),
+            Self::GetMigrationId(p, _) => {
+                write!(f, "couldn't get migration identifier from {}", p.display())
+            }
+            Self::GetOutputDir(_) => f.write_str("couldn't get output directory"),
             Self::ReadMigration(n, v, _) => match n {
                 Some(n) => write!(f, "couldn't read migration script '{n}'"),
                 None => write!(f, "couldn't read migration script for version {v}"),
@@ -91,14 +93,14 @@ where
     }
 }
 
-impl<I, M> Debug for ParseError<I, M>
-where
-    I: Debug,
-    M: Migration,
-{
+impl Debug for ParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GetMigration(v, e) => f.debug_tuple("GetMigration").field(v).field(e).finish(),
+            Self::ReadDirectory(e) => f.debug_tuple("ReadDirectory").field(e).finish(),
+            Self::GetMigrationId(p, e) => {
+                f.debug_tuple("GetMigrationId").field(p).field(e).finish()
+            }
+            Self::GetOutputDir(e) => f.debug_tuple("GetOutputDir").field(e).finish(),
             Self::ReadMigration(n, v, e) => f
                 .debug_tuple("ReadMigration")
                 .field(n)

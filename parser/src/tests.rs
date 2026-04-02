@@ -1,14 +1,13 @@
-use crate::migration::StrProvider;
 use crate::parse;
 
 #[test]
 fn parse_with_valid() {
     // Parse.
     let mut out = Vec::new();
-    let migrations = StrProvider::new([
+    let migrations = [
         "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
         "CREATE TABLE bar (bar text);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
-    ]);
+    ];
 
     parse(&mut out, migrations).unwrap();
 

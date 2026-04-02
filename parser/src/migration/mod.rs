@@ -1,32 +1,35 @@
 //! Interface to migration script.
-pub use self::str::*;
-
-use std::convert::Infallible;
-
-mod str;
+use std::path::PathBuf;
 
 /// Encapsulates migration script.
 pub trait Migration: Sized {
-    /// Error will be produced by [Self::read()].
-    type Err: std::error::Error + 'static;
-
     /// Returns name of this migration.
     fn name(&self) -> Option<String>;
 
     /// Read all statements for the migration.
-    fn read(self) -> Result<String, Self::Err>;
+    fn read(self) -> Result<String, Box<dyn std::error::Error>>;
 }
 
 impl Migration for &str {
-    type Err = Infallible;
-
     #[inline]
     fn name(&self) -> Option<String> {
         None
     }
 
     #[inline]
-    fn read(self) -> Result<String, Self::Err> {
+    fn read(self) -> Result<String, Box<dyn std::error::Error>> {
         Ok(self.into())
+    }
+}
+
+impl Migration for PathBuf {
+    fn name(&self) -> Option<String> {
+        self.file_name().map(|v| v.to_string_lossy().into_owned())
+    }
+
+    fn read(self) -> Result<String, Box<dyn std::error::Error>> {
+        let v = std::fs::read_to_string(self)?;
+
+        Ok(v)
     }
 }

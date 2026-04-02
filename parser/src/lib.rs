@@ -40,12 +40,11 @@ mod writer;
 ///
 /// # Panics
 /// If `f` returns a duplicated identifier.
-pub fn parse_for_build_script<M, K>(
+pub fn parse_for_build_script<K>(
     migrations: impl AsRef<str>,
     mut f: impl FnMut(&Path) -> Result<K, Box<dyn std::error::Error>>,
 ) -> Result<(), ParseError>
 where
-    M: Migration,
     K: Ord,
 {
     // List all SQL files.

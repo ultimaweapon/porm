@@ -1,0 +1,11 @@
+[package]
+name = "porm-example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+porm = { path = ".." }
+tokio-postgres = "0.7.17"
+
+[build-dependencies]
+porm-parser = { path = "../parser" }

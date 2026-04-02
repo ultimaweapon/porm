@@ -21,6 +21,6 @@ pub fn transform() -> syn::Result<TokenStream> {
     };
 
     Ok(quote! {
-        ::std::include!(#path)
+        ::std::include!(#path);
     })
 }

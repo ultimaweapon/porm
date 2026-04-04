@@ -214,6 +214,7 @@ fn parse_create_stmt(
                 e.insert(Field {
                     ty: c.ty,
                     nullable: c.nullable,
+                    has_default: c.has_default,
                 });
             }
             Node::Constraint(v) => {
@@ -247,18 +248,25 @@ fn parse_column_def(model: &mut Model, node: Box<ColumnDef>) -> Option<Column> {
     let ty = node.type_name?;
     let ty = parse_column_type(model, ty.names)?;
     let mut nullable = true;
+    let mut has_default = false;
 
     for c in node.constraints {
         if let Some(Node::Constraint(v)) = c.node {
             match v.contype.try_into().unwrap() {
                 ConstrType::ConstrNull => nullable = true,
                 ConstrType::ConstrNotnull => nullable = false,
+                ConstrType::ConstrDefault => has_default = true,
                 _ => (),
             }
         }
     }
 
-    Some(Column { name, ty, nullable })
+    Some(Column {
+        name,
+        ty,
+        nullable,
+        has_default,
+    })
 }
 
 fn parse_column_type(model: &mut Model, nodes: Vec<pg_query::protobuf::Node>) -> Option<Type> {
@@ -486,6 +494,81 @@ fn generate(
 
             w.line("}")?;
         }
+
+        w.decrease_indent();
+        w.line("}")?;
+
+        // Write builder struct.
+        w.blank_line()?;
+
+        if model.has_lifetime {
+            w.line(format_args!("pub struct {name}Builder<'a> {{"))?;
+        } else {
+            w.line(format_args!("pub struct {name}Builder {{"))?;
+        }
+
+        w.increase_indent();
+
+        for (c, f) in &model.fields {
+            w.begin(format_args!(r#"{c}: "#))?;
+
+            if f.nullable {
+                w.end(format_args!(r#"Option<Option<{}>>,"#, f.ty.for_builder()))?;
+            } else if matches!(f.ty, Type::Serial) || f.has_default {
+                w.end(format_args!(r#"Option<{}>,"#, f.ty.for_builder()))?;
+            } else {
+                w.end(format_args!(r#"{},"#, f.ty.for_builder()))?;
+            }
+        }
+
+        w.decrease_indent();
+        w.line("}")?;
+
+        w.blank_line()?;
+
+        if model.has_lifetime {
+            w.line(format_args!("impl<'a> {name}Builder<'a> {{"))?;
+        } else {
+            w.line(format_args!("impl {name}Builder {{"))?;
+        }
+
+        w.increase_indent();
+
+        // Write new for builder.
+        w.begin("pub fn new(")?;
+
+        for (i, (c, f)) in model
+            .fields
+            .iter()
+            .filter(|(_, f)| !f.is_optional())
+            .enumerate()
+        {
+            if i != 0 {
+                w.append(", ")?;
+            }
+
+            w.end(format_args!(r#"{}: {}"#, c, f.ty.for_builder()))?;
+        }
+
+        w.end(") -> Self {")?;
+        w.increase_indent();
+        w.begin("Self { ")?;
+
+        for (i, (c, f)) in model.fields.iter().enumerate() {
+            if i != 0 {
+                w.append(", ")?;
+            }
+
+            if f.is_optional() {
+                w.append(format_args!(r#"{c}: None"#))?;
+            } else {
+                w.append(format_args!(r#"{c}"#))?;
+            }
+        }
+
+        w.end(" }")?;
+        w.decrease_indent();
+        w.line("}")?;
 
         w.decrease_indent();
         w.line("}")?;

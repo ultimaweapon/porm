@@ -19,6 +19,16 @@ impl Type {
         }
     }
 
+    pub fn for_builder(&self) -> &'static str {
+        match self {
+            Self::BigInt => "i64",
+            Self::Integer | Self::Serial => "i32",
+            Self::SmallInt => "i16",
+            Self::Text => "&'a str",
+            Self::TimestampWithTz => "SystemTime",
+        }
+    }
+
     pub fn for_param(&self) -> &'static str {
         match self {
             Self::BigInt => "i64",

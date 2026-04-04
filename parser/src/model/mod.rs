@@ -43,4 +43,11 @@ impl Model {
 pub struct Field {
     pub ty: Type,
     pub nullable: bool,
+    pub has_default: bool,
+}
+
+impl Field {
+    pub fn is_optional(&self) -> bool {
+        self.nullable || matches!(self.ty, Type::Serial) || self.has_default
+    }
 }

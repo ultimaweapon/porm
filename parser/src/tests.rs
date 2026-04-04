@@ -48,6 +48,18 @@ impl<'a> Foo<'a> {
     }
 }
 
+pub struct FooBuilder<'a> {
+    key: Option<i32>,
+    value: Option<Option<i64>>,
+    desc: Option<Option<&'a str>>,
+}
+
+impl<'a> FooBuilder<'a> {
+    pub fn new() -> Self {
+        Self { key: None, value: None, desc: None }
+    }
+}
+
 pub struct Bar {
     pub bar: Option<i16>,
 }
@@ -59,6 +71,16 @@ impl Bar {
     }
 }
 
+pub struct BarBuilder {
+    bar: Option<Option<i16>>,
+}
+
+impl BarBuilder {
+    pub fn new() -> Self {
+        Self { bar: None }
+    }
+}
+
 pub struct FooBar {
     pub baz: Option<SystemTime>,
 }
@@ -67,6 +89,16 @@ impl FooBar {
     pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
         client.execute("INSERT INTO foo_bar (baz) VALUES ($1)", &[&self.baz]).await?;
         Ok(())
+    }
+}
+
+pub struct FooBarBuilder {
+    baz: Option<Option<SystemTime>>,
+}
+
+impl FooBarBuilder {
+    pub fn new() -> Self {
+        Self { baz: None }
     }
 }
 

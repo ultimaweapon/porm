@@ -6,7 +6,7 @@ fn parse_with_valid() {
     let mut out = Vec::new();
     let migrations = [
         "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
-        "CREATE TABLE bar (bar text);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+        "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
     ];
 
     parse(&mut out, migrations).unwrap();
@@ -33,7 +33,7 @@ impl<'a> Foo<'a> {
         Ok(())
     }
 
-    pub async fn select<T: GenericClient>(client: &T, key: i32) -> Result<Option<Self>, Error> {
+    pub async fn find<T: GenericClient>(client: &T, key: i32) -> Result<Option<Self>, Error> {
         let r = client.query_opt("SELECT * FROM foo WHERE key = $1", &[&key]).await?;
         let r = match r {
             Some(v) => v,
@@ -48,11 +48,11 @@ impl<'a> Foo<'a> {
     }
 }
 
-pub struct Bar<'a> {
-    pub bar: Option<Cow<'a, str>>,
+pub struct Bar {
+    pub bar: Option<i16>,
 }
 
-impl<'a> Bar<'a> {
+impl Bar {
     pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
         client.execute("INSERT INTO bar (bar) VALUES ($1)", &[&self.bar]).await?;
         Ok(())
@@ -77,7 +77,7 @@ pub static MIGRATIONS: [Migration; 2] = [
     },
     Migration {
         name: None,
-        script: "CREATE TABLE bar (bar text);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+        script: "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
     },
 ];
 "#

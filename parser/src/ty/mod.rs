@@ -3,6 +3,7 @@ pub enum Type {
     BigInt,
     Integer,
     Serial,
+    SmallInt,
     Text,
     TimestampWithTz,
 }
@@ -12,6 +13,7 @@ impl Type {
         match self {
             Self::BigInt => "i64",
             Self::Integer | Self::Serial => "i32",
+            Self::SmallInt => "i16",
             Self::Text => "Cow<'a, str>",
             Self::TimestampWithTz => "SystemTime",
         }
@@ -21,6 +23,7 @@ impl Type {
         match self {
             Self::BigInt => "i64",
             Self::Integer | Self::Serial => "i32",
+            Self::SmallInt => "i16",
             Self::Text => "&str",
             Self::TimestampWithTz => "&SystemTime",
         }
@@ -31,6 +34,7 @@ impl Type {
             Self::BigInt => "i64",
             Self::Integer => "i32",
             Self::Serial => "i32",
+            Self::SmallInt => "i16",
             Self::Text => "String",
             Self::TimestampWithTz => "SystemTime",
         }
@@ -41,6 +45,7 @@ impl Type {
             Self::BigInt => true,
             Self::Integer => true,
             Self::Serial => true,
+            Self::SmallInt => true,
             Self::Text => true,
             Self::TimestampWithTz => false,
         }
@@ -51,6 +56,7 @@ impl Type {
             Self::BigInt => false,
             Self::Integer => false,
             Self::Serial => false,
+            Self::SmallInt => false,
             Self::Text => true,
             Self::TimestampWithTz => false,
         }

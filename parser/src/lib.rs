@@ -287,6 +287,7 @@ fn parse_system_type(node: pg_query::protobuf::Node) -> Option<Type> {
     };
 
     match name.as_str() {
+        "int2" => Some(Type::SmallInt),
         "int4" => Some(Type::Integer),
         "int8" => Some(Type::BigInt),
         "timestamptz" => Some(Type::TimestampWithTz),
@@ -385,10 +386,10 @@ fn generate(
 
         w.line("}")?;
 
-        // Write select method.
+        // Write find method.
         if !model.primary_key.is_empty() {
             w.blank_line()?;
-            w.begin("pub async fn select<T: GenericClient>(client: &T")?;
+            w.begin("pub async fn find<T: GenericClient>(client: &T")?;
 
             for c in &model.primary_key {
                 let f = model.fields.get(c).unwrap();

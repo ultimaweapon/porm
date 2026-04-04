@@ -1,7 +1,11 @@
+pub use self::constraint::*;
+
 use std::env::VarError;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::PathBuf;
+
+mod constraint;
 
 /// Reason why [crate::parse()] fails.
 pub enum ParseError {
@@ -23,6 +27,8 @@ pub enum ParseError {
     UnsupportedColumnName(Option<String>, usize, String, String),
     /// Migration contains duplicated column.
     DuplicatedColumn(Option<String>, usize, String, String),
+    /// Failed to parse table constraint.
+    TableConstraint(Option<String>, usize, String, ConstraintError),
     /// Couldn't write generated code.
     WriteCode(std::io::Error),
 }
@@ -35,6 +41,7 @@ impl std::error::Error for ParseError {
             Self::GetOutputDir(e) => Some(e),
             Self::ReadMigration(_, _, e) => Some(e.deref()),
             Self::ParseMigration(_, _, e) => Some(e),
+            Self::TableConstraint(_, _, _, e) => Some(e),
             Self::WriteCode(e) => Some(e),
             _ => None,
         }
@@ -88,6 +95,16 @@ impl Display for ParseError {
                     "duplicated column '{c}' in table '{t}' on migration version {v}"
                 ),
             },
+            Self::TableConstraint(n, v, t, _) => match n {
+                Some(n) => write!(
+                    f,
+                    "couldn't parse constraint on table '{t}' from migration '{n}'"
+                ),
+                None => write!(
+                    f,
+                    "couldn't parse constraint on table '{t}' from migration version {v}"
+                ),
+            },
             Self::WriteCode(_) => f.write_str("couldn't write generated code"),
         }
     }
@@ -138,6 +155,13 @@ impl Debug for ParseError {
                 .field(v)
                 .field(t)
                 .field(c)
+                .finish(),
+            Self::TableConstraint(n, v, t, e) => f
+                .debug_tuple("TableConstraint")
+                .field(n)
+                .field(v)
+                .field(t)
+                .field(e)
                 .finish(),
             Self::WriteCode(e) => f.debug_tuple("WriteCode").field(e).finish(),
         }

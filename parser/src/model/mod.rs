@@ -1,3 +1,4 @@
+use crate::ConstraintError;
 use crate::ty::Type;
 use indexmap::IndexMap;
 use pg_query::NodeEnum;
@@ -12,7 +13,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn parse_table_constraint(&mut self, node: Box<Constraint>) {
+    pub fn parse_table_constraint(&mut self, node: Box<Constraint>) -> Result<(), ConstraintError> {
         let ty = node.contype.try_into().unwrap();
 
         #[allow(clippy::single_match)] // TODO: Remove this.
@@ -20,13 +21,21 @@ impl Model {
             ConstrType::ConstrPrimary => {
                 for c in node.keys {
                     match c.node.unwrap() {
-                        NodeEnum::String(v) => self.primary_key.push(v.sval),
+                        NodeEnum::String(v) => {
+                            if !self.fields.contains_key(&v.sval) {
+                                return Err(ConstraintError::UnknownPrimaryKey(v.sval));
+                            }
+
+                            self.primary_key.push(v.sval);
+                        }
                         _ => continue,
                     };
                 }
             }
             _ => (),
         }
+
+        Ok(())
     }
 }
 

@@ -216,7 +216,11 @@ fn parse_create_stmt(
                     nullable: c.nullable,
                 });
             }
-            Node::Constraint(v) => model.parse_table_constraint(v),
+            Node::Constraint(v) => {
+                if let Err(e) = model.parse_table_constraint(v) {
+                    return Some(Err(ParseError::TableConstraint(mn.clone(), mv, table, e)));
+                }
+            }
             _ => (),
         }
     }

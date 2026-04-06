@@ -1,6 +1,6 @@
 # Porm
 
-Porm is a new type of ORM for PostgreSQL. Instead of defining a model in Rust, Porm parse migration scripts and generate models from it.
+Porm is a new type of ORM for PostgreSQL. Instead of defining some models in Rust, Porm parse migration scripts and generate models from it.
 
 ## Features
 

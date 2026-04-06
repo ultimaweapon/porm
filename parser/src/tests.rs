@@ -7,6 +7,7 @@ fn parse_with_valid() {
     let migrations = [
         "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
         "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+        "ALTER TABLE foo ADD disabled boolean NOT NULL DEFAULT FALSE;",
     ];
 
     parse(&mut out, migrations).unwrap();
@@ -25,11 +26,12 @@ pub struct Foo<'a> {
     pub key: i32,
     pub value: Option<i64>,
     pub desc: Option<Cow<'a, str>>,
+    pub disabled: bool,
 }
 
 impl<'a> Foo<'a> {
     pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
-        client.execute("INSERT INTO foo (key, value, desc) VALUES ($1, $2, $3)", &[&self.key, &self.value, &self.desc]).await?;
+        client.execute("INSERT INTO foo (key, value, desc, disabled) VALUES ($1, $2, $3, $4)", &[&self.key, &self.value, &self.desc, &self.disabled]).await?;
         Ok(())
     }
 
@@ -43,8 +45,9 @@ impl<'a> Foo<'a> {
         let key = r.try_get::<_, i32>("key")?;
         let value = r.try_get::<_, Option<i64>>("value")?;
         let desc = r.try_get::<_, Option<String>>("desc")?;
+        let disabled = r.try_get::<_, bool>("disabled")?;
 
-        Ok(Some(Self { key, value, desc: desc.map(Cow::Owned) }))
+        Ok(Some(Self { key, value, desc: desc.map(Cow::Owned), disabled }))
     }
 }
 
@@ -52,11 +55,12 @@ pub struct FooBuilder<'a> {
     key: Option<i32>,
     value: Option<Option<i64>>,
     desc: Option<Option<&'a str>>,
+    disabled: Option<bool>,
 }
 
 impl<'a> FooBuilder<'a> {
     pub fn new() -> Self {
-        Self { key: None, value: None, desc: None }
+        Self { key: None, value: None, desc: None, disabled: None }
     }
 }
 
@@ -102,7 +106,7 @@ impl FooBarBuilder {
     }
 }
 
-pub static MIGRATIONS: [Migration; 2] = [
+pub static MIGRATIONS: [Migration; 3] = [
     Migration {
         name: None,
         script: "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
@@ -110,6 +114,10 @@ pub static MIGRATIONS: [Migration; 2] = [
     Migration {
         name: None,
         script: "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+    },
+    Migration {
+        name: None,
+        script: "ALTER TABLE foo ADD disabled boolean NOT NULL DEFAULT FALSE;",
     },
 ];
 "#

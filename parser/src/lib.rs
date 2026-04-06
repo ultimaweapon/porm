@@ -3,14 +3,13 @@
 //! Usually this crate will be used from build script.
 pub use self::error::*;
 
-use self::column::Column;
 use self::migration::Migration;
 use self::model::{Field, Model};
 use self::ty::Type;
 use self::writer::Writer;
 use heck::AsUpperCamelCase;
-use pg_query::protobuf::node::Node;
-use pg_query::protobuf::{ColumnDef, ConstrType, CreateStmt};
+use pg_query::protobuf::{AlterTableStmt, AlterTableType, ColumnDef, ConstrType, CreateStmt};
+use pg_query::{Node, NodeEnum};
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
@@ -20,7 +19,6 @@ use std::path::{MAIN_SEPARATOR, Path};
 
 pub mod migration;
 
-mod column;
 mod error;
 mod model;
 #[cfg(test)]
@@ -142,7 +140,8 @@ where
 
             // Process.
             let r = match node {
-                Node::CreateStmt(n) => parse_create_stmt(&mut cx, &name, version, n),
+                NodeEnum::CreateStmt(n) => parse_create_stmt(&mut cx, &name, version, n),
+                NodeEnum::AlterTableStmt(n) => parse_alter_table_stmt(&mut cx, &name, version, n),
                 _ => continue,
             };
 
@@ -183,41 +182,12 @@ fn parse_create_stmt(
         };
 
         match def {
-            Node::ColumnDef(v) => {
-                use indexmap::map::Entry;
-
-                // Check column name.
-                let c = parse_column_def(&mut model, v)?;
-
-                if c.name.chars().any(|c| c.is_uppercase()) {
-                    return Some(Err(ParseError::UnsupportedColumnName(
-                        mn.clone(),
-                        mv,
-                        table,
-                        c.name,
-                    )));
+            NodeEnum::ColumnDef(v) => {
+                if let Err(e) = parse_column_def(&mut model, v) {
+                    return Some(Err(ParseError::Column(mn.clone(), mv, table, e)));
                 }
-
-                // Check if exists.
-                let e = match model.fields.entry(c.name) {
-                    Entry::Occupied(e) => {
-                        return Some(Err(ParseError::DuplicatedColumn(
-                            mn.clone(),
-                            mv,
-                            table,
-                            e.key().clone(),
-                        )));
-                    }
-                    Entry::Vacant(e) => e,
-                };
-
-                e.insert(Field {
-                    ty: c.ty,
-                    nullable: c.nullable,
-                    has_default: c.has_default,
-                });
             }
-            Node::Constraint(v) => {
+            NodeEnum::Constraint(v) => {
                 if let Err(e) = model.parse_table_constraint(v) {
                     return Some(Err(ParseError::TableConstraint(mn.clone(), mv, table, e)));
                 }
@@ -243,15 +213,58 @@ fn parse_create_stmt(
     Some(Ok(()))
 }
 
-fn parse_column_def(model: &mut Model, node: Box<ColumnDef>) -> Option<Column> {
+fn parse_alter_table_stmt(
+    cx: &mut Context,
+    mn: &Option<String>,
+    mv: usize,
+    node: AlterTableStmt,
+) -> Option<Result<(), ParseError>> {
+    let table = node.relation?.relname;
+    let model = match cx.models.get_mut(&table) {
+        Some(v) => v,
+        None => return Some(Err(ParseError::UnknownTable(mn.clone(), mv, table))),
+    };
+
+    for cmd in node.cmds {
+        let cmd = match cmd.node {
+            Some(NodeEnum::AlterTableCmd(n)) => n,
+            _ => continue,
+        };
+
+        match cmd.subtype.try_into().unwrap() {
+            AlterTableType::AtAddColumn => match cmd.def.and_then(|v| v.node) {
+                Some(NodeEnum::ColumnDef(n)) => {
+                    if let Err(e) = parse_column_def(model, n) {
+                        return Some(Err(ParseError::Column(mn.clone(), mv, table, e)));
+                    }
+                }
+                _ => continue,
+            },
+            _ => continue,
+        }
+    }
+
+    Some(Ok(()))
+}
+
+fn parse_column_def(model: &mut Model, node: Box<ColumnDef>) -> Result<(), ColumnError> {
+    use indexmap::map::Entry;
+
+    // Check column name.
     let name = node.colname;
-    let ty = node.type_name?;
-    let ty = parse_column_type(model, ty.names)?;
+
+    if name.chars().any(|c| c.is_uppercase()) {
+        return Err(ColumnError::UnsupportedName(name));
+    }
+
+    // Parse definition.
+    let ty = node.type_name.unwrap();
+    let ty = parse_column_type(model, ty.names);
     let mut nullable = true;
     let mut has_default = false;
 
     for c in node.constraints {
-        if let Some(Node::Constraint(v)) = c.node {
+        if let Some(NodeEnum::Constraint(v)) = c.node {
             match v.contype.try_into().unwrap() {
                 ConstrType::ConstrNull => nullable = true,
                 ConstrType::ConstrNotnull => nullable = false,
@@ -261,45 +274,53 @@ fn parse_column_def(model: &mut Model, node: Box<ColumnDef>) -> Option<Column> {
         }
     }
 
-    Some(Column {
-        name,
+    // Check if exists.
+    let e = match model.fields.entry(name) {
+        Entry::Occupied(e) => return Err(ColumnError::Duplicated(e.key().clone())),
+        Entry::Vacant(e) => e,
+    };
+
+    e.insert(Field {
         ty,
         nullable,
         has_default,
-    })
+    });
+
+    Ok(())
 }
 
-fn parse_column_type(model: &mut Model, nodes: Vec<pg_query::protobuf::Node>) -> Option<Type> {
+fn parse_column_type(model: &mut Model, nodes: Vec<Node>) -> Type {
     let mut nodes = nodes.into_iter();
-    let name = match nodes.next()?.node? {
-        Node::String(v) => v.sval,
-        _ => return None,
+    let name = match nodes.next().unwrap().node.unwrap() {
+        NodeEnum::String(v) => v.sval,
+        v => todo!("{v:?}"),
     };
 
     match name.as_str() {
-        "pg_catalog" => nodes.next().and_then(parse_system_type),
-        "serial" => Some(Type::Serial),
+        "pg_catalog" => nodes.next().map(parse_system_type).unwrap(),
+        "serial" => Type::Serial,
         "text" => {
             model.has_lifetime = true;
 
-            Some(Type::Text)
+            Type::Text
         }
-        _ => None,
+        v => todo!("{v}"),
     }
 }
 
-fn parse_system_type(node: pg_query::protobuf::Node) -> Option<Type> {
-    let name = match node.node? {
-        Node::String(v) => v.sval,
-        _ => return None,
+fn parse_system_type(node: Node) -> Type {
+    let name = match node.node.unwrap() {
+        NodeEnum::String(v) => v.sval,
+        v => todo!("{v:?}"),
     };
 
     match name.as_str() {
-        "int2" => Some(Type::SmallInt),
-        "int4" => Some(Type::Integer),
-        "int8" => Some(Type::BigInt),
-        "timestamptz" => Some(Type::TimestampWithTz),
-        _ => None,
+        "bool" => Type::Boolean,
+        "int2" => Type::SmallInt,
+        "int4" => Type::Integer,
+        "int8" => Type::BigInt,
+        "timestamptz" => Type::TimestampWithTz,
+        v => todo!("{v}"),
     }
 }
 

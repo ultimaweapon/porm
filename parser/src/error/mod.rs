@@ -1,3 +1,4 @@
+pub use self::column::*;
 pub use self::constraint::*;
 
 use std::env::VarError;
@@ -5,6 +6,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::PathBuf;
 
+mod column;
 mod constraint;
 
 /// Reason why [crate::parse()] fails.
@@ -23,10 +25,10 @@ pub enum ParseError {
     UnsupportedTableName(Option<String>, usize, String),
     /// Migration contains duplicated table.
     DuplicatedTable(Option<String>, usize, String),
-    /// Migration contains unsupported column name.
-    UnsupportedColumnName(Option<String>, usize, String, String),
-    /// Migration contains duplicated column.
-    DuplicatedColumn(Option<String>, usize, String, String),
+    /// Migration contains unknown table.
+    UnknownTable(Option<String>, usize, String),
+    /// Failed to parse column.
+    Column(Option<String>, usize, String, ColumnError),
     /// Failed to parse table constraint.
     TableConstraint(Option<String>, usize, String, ConstraintError),
     /// Couldn't write generated code.
@@ -41,6 +43,7 @@ impl std::error::Error for ParseError {
             Self::GetOutputDir(e) => Some(e),
             Self::ReadMigration(_, _, e) => Some(e.deref()),
             Self::ParseMigration(_, _, e) => Some(e),
+            Self::Column(_, _, _, e) => Some(e),
             Self::TableConstraint(_, _, _, e) => Some(e),
             Self::WriteCode(e) => Some(e),
             _ => None,
@@ -73,26 +76,20 @@ impl Display for ParseError {
             },
             Self::DuplicatedTable(n, v, t) => match n {
                 Some(n) => write!(f, "duplicated table '{t}' on migration '{n}'"),
-                None => write!(f, "duplicated table '{t}' on migration version '{v}'"),
+                None => write!(f, "duplicated table '{t}' on migration version {v}"),
             },
-            Self::UnsupportedColumnName(n, v, t, c) => match n {
+            Self::UnknownTable(n, v, t) => match n {
+                Some(n) => write!(f, "unknown table '{t}' on migration '{n}'"),
+                None => write!(f, "unknown table '{t}' on migration version {v}"),
+            },
+            Self::Column(n, v, t, _) => match n {
                 Some(n) => write!(
                     f,
-                    "unsupported column name '{c}' in table '{t}' on migration '{n}'"
+                    "couldn't parse column for table '{t}' on migration '{n}'"
                 ),
                 None => write!(
                     f,
-                    "unsupported column name '{c}' in table '{t}' on migration version {v}"
-                ),
-            },
-            Self::DuplicatedColumn(n, v, t, c) => match n {
-                Some(n) => write!(
-                    f,
-                    "duplicated column '{c}' in table '{t}' on migration '{n}'"
-                ),
-                None => write!(
-                    f,
-                    "duplicated column '{c}' in table '{t}' on migration version {v}"
+                    "couldn't parse column for table '{t}' on migration version {v}"
                 ),
             },
             Self::TableConstraint(n, v, t, _) => match n {
@@ -142,19 +139,18 @@ impl Debug for ParseError {
                 .field(v)
                 .field(t)
                 .finish(),
-            Self::UnsupportedColumnName(n, v, t, c) => f
-                .debug_tuple("UnsupportedColumnName")
+            Self::UnknownTable(n, v, t) => f
+                .debug_tuple("UnknownTable")
                 .field(n)
                 .field(v)
                 .field(t)
-                .field(c)
                 .finish(),
-            Self::DuplicatedColumn(n, v, t, c) => f
-                .debug_tuple("DuplicatedColumn")
+            Self::Column(n, v, t, e) => f
+                .debug_tuple("Column")
                 .field(n)
                 .field(v)
                 .field(t)
-                .field(c)
+                .field(e)
                 .finish(),
             Self::TableConstraint(n, v, t, e) => f
                 .debug_tuple("TableConstraint")

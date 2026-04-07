@@ -3,6 +3,7 @@ pub use self::constraint::*;
 
 use std::env::VarError;
 use std::fmt::{Debug, Display, Formatter};
+use std::num::NonZero;
 use std::ops::Deref;
 use std::path::PathBuf;
 
@@ -28,9 +29,9 @@ pub enum ParseError {
     /// Migration contains unknown table.
     UnknownTable(Option<String>, usize, String),
     /// Failed to parse column.
-    Column(Option<String>, usize, String, ColumnError),
+    Column(Option<String>, usize, NonZero<u32>, ColumnError),
     /// Failed to parse table constraint.
-    TableConstraint(Option<String>, usize, String, ConstraintError),
+    TableConstraint(Option<String>, usize, NonZero<u32>, ConstraintError),
     /// Couldn't write generated code.
     WriteCode(std::io::Error),
 }
@@ -82,24 +83,21 @@ impl Display for ParseError {
                 Some(n) => write!(f, "unknown table '{t}' on migration '{n}'"),
                 None => write!(f, "unknown table '{t}' on migration version {v}"),
             },
-            Self::Column(n, v, t, _) => match n {
-                Some(n) => write!(
-                    f,
-                    "couldn't parse column for table '{t}' on migration '{n}'"
-                ),
+            Self::Column(n, v, l, _) => match n {
+                Some(n) => write!(f, "couldn't parse column at line {l} on migration '{n}'"),
                 None => write!(
                     f,
-                    "couldn't parse column for table '{t}' on migration version {v}"
+                    "couldn't parse column at line {l} on migration version {v}"
                 ),
             },
-            Self::TableConstraint(n, v, t, _) => match n {
+            Self::TableConstraint(n, v, l, _) => match n {
                 Some(n) => write!(
                     f,
-                    "couldn't parse constraint on table '{t}' from migration '{n}'"
+                    "couldn't parse table constraint at line {l} from migration '{n}'"
                 ),
                 None => write!(
                     f,
-                    "couldn't parse constraint on table '{t}' from migration version {v}"
+                    "couldn't parse table constraint at line {l} from migration version {v}"
                 ),
             },
             Self::WriteCode(_) => f.write_str("couldn't write generated code"),
@@ -145,18 +143,18 @@ impl Debug for ParseError {
                 .field(v)
                 .field(t)
                 .finish(),
-            Self::Column(n, v, t, e) => f
+            Self::Column(n, v, l, e) => f
                 .debug_tuple("Column")
                 .field(n)
                 .field(v)
-                .field(t)
+                .field(l)
                 .field(e)
                 .finish(),
-            Self::TableConstraint(n, v, t, e) => f
+            Self::TableConstraint(n, v, l, e) => f
                 .debug_tuple("TableConstraint")
                 .field(n)
                 .field(v)
-                .field(t)
+                .field(l)
                 .field(e)
                 .finish(),
             Self::WriteCode(e) => f.debug_tuple("WriteCode").field(e).finish(),

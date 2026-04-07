@@ -8,6 +8,7 @@ use self::model::{Field, Model};
 use self::ty::Type;
 use self::writer::Writer;
 use heck::AsUpperCamelCase;
+use memchr::Memchr;
 use pg_query::protobuf::{AlterTableStmt, AlterTableType, ColumnDef, ConstrType, CreateStmt};
 use pg_query::{Node, NodeEnum};
 use proc_macro2::Literal;
@@ -15,6 +16,8 @@ use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::num::NonZero;
+use std::ops::Index;
 use std::path::{MAIN_SEPARATOR, Path};
 
 pub mod migration;
@@ -113,9 +116,7 @@ where
     // Load migrations.
     let scripts = migrations.into_iter();
     let mut migrations = Vec::new();
-    let mut cx = Context {
-        models: FxHashMap::default(),
-    };
+    let mut models = FxHashMap::default();
 
     for (version, migration) in scripts.enumerate() {
         // Get migration.
@@ -138,6 +139,12 @@ where
                 None => continue,
             };
 
+            // Set up parse context.
+            let mut cx = Context {
+                models: &mut models,
+                script: &script,
+            };
+
             // Process.
             let r = match node {
                 NodeEnum::CreateStmt(n) => parse_create_stmt(&mut cx, &name, version, n),
@@ -153,7 +160,7 @@ where
         migrations.push((name, script));
     }
 
-    generate(cx, migrations, out).map_err(ParseError::WriteCode)
+    generate(migrations, models, out).map_err(ParseError::WriteCode)
 }
 
 fn parse_create_stmt(
@@ -183,13 +190,22 @@ fn parse_create_stmt(
 
         match def {
             NodeEnum::ColumnDef(v) => {
+                let loc = v.location;
+
                 if let Err(e) = parse_column_def(&mut model, v) {
-                    return Some(Err(ParseError::Column(mn.clone(), mv, table, e)));
+                    return Some(Err(ParseError::Column(mn.clone(), mv, cx.get_line(loc), e)));
                 }
             }
             NodeEnum::Constraint(v) => {
+                let loc = v.location;
+
                 if let Err(e) = model.parse_table_constraint(v) {
-                    return Some(Err(ParseError::TableConstraint(mn.clone(), mv, table, e)));
+                    return Some(Err(ParseError::TableConstraint(
+                        mn.clone(),
+                        mv,
+                        cx.get_line(loc),
+                        e,
+                    )));
                 }
             }
             _ => (),
@@ -234,8 +250,10 @@ fn parse_alter_table_stmt(
         match cmd.subtype.try_into().unwrap() {
             AlterTableType::AtAddColumn => match cmd.def.and_then(|v| v.node) {
                 Some(NodeEnum::ColumnDef(n)) => {
+                    let loc = n.location;
+
                     if let Err(e) = parse_column_def(model, n) {
-                        return Some(Err(ParseError::Column(mn.clone(), mv, table, e)));
+                        return Some(Err(ParseError::Column(mn.clone(), mv, cx.get_line(loc), e)));
                     }
                 }
                 _ => continue,
@@ -325,8 +343,8 @@ fn parse_system_type(node: Node) -> Type {
 }
 
 fn generate(
-    cx: Context,
     migrations: Vec<(Option<String>, String)>,
+    models: FxHashMap<String, Model>,
     out: impl Write,
 ) -> Result<(), std::io::Error> {
     // Generate preamble.
@@ -338,7 +356,7 @@ fn generate(
     w.line("use tokio_postgres::{Error, GenericClient};")?;
 
     // Write models.
-    for (table, model) in cx.models {
+    for (table, model) in models {
         let name = AsUpperCamelCase(&table);
 
         w.blank_line()?;
@@ -637,6 +655,17 @@ fn generate(
 }
 
 /// Context to parse migration scripts.
-struct Context {
-    models: FxHashMap<String, Model>,
+struct Context<'a> {
+    models: &'a mut FxHashMap<String, Model>,
+    script: &'a str,
+}
+
+impl<'a> Context<'a> {
+    fn get_line(&self, loc: i32) -> NonZero<u32> {
+        let loc = usize::try_from(loc).unwrap();
+        let script = self.script.as_bytes().index(..loc);
+        let ln = Memchr::new(b'\n', script).count() + 1;
+
+        ln.try_into().ok().and_then(NonZero::new).unwrap()
+    }
 }

@@ -352,7 +352,9 @@ fn generate(
 
     w.line("use porm::migration::Migration;")?;
     w.line("use std::borrow::Cow;")?;
+    w.line("use std::fmt::Write;")?;
     w.line("use std::time::SystemTime;")?;
+    w.line("use tokio_postgres::types::ToSql;")?;
     w.line("use tokio_postgres::{Error, GenericClient};")?;
 
     // Write models.
@@ -609,6 +611,11 @@ fn generate(
         w.decrease_indent();
         w.line("}")?;
 
+        // Write create for builder.
+        w.blank_line()?;
+
+        generate_builder_create(&mut w, &table, &model)?;
+
         w.decrease_indent();
         w.line("}")?;
     }
@@ -650,6 +657,88 @@ fn generate(
 
     w.decrease_indent();
     w.line("];")?;
+
+    Ok(())
+}
+
+fn generate_builder_create<T>(
+    w: &mut Writer<T>,
+    table: &str,
+    model: &Model,
+) -> Result<(), std::io::Error>
+where
+    T: Write,
+{
+    w.line("pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {")?;
+    w.increase_indent();
+    w.line("let mut sql = String::with_capacity(1024);")?;
+    w.line(format_args!(
+        "let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity({});",
+        model.fields.len()
+    ))?;
+
+    w.blank_line()?;
+    w.begin(r#"sql.push_str("INSERT INTO "#)?;
+    w.append(table)?;
+    w.append(" (")?;
+
+    for (i, c) in model.fields.keys().enumerate() {
+        if i != 0 {
+            w.append(", ")?;
+        }
+
+        w.append(c.as_str())?;
+    }
+
+    w.end(r#") VALUES (");"#)?;
+
+    // Generate values.
+    for (i, (c, f)) in model.fields.iter().enumerate() {
+        w.blank_line()?;
+
+        if f.is_optional() {
+            w.line(format_args!("if let Some(v) = &self.{c} {{"))?;
+            w.increase_indent();
+            w.line("values.push(v);")?;
+
+            if i != 0 {
+                w.line(r#"write!(sql, ", ${}", values.len()).unwrap();"#)?;
+            } else {
+                w.line(r#"write!(sql, "${}", values.len()).unwrap();"#)?;
+            }
+
+            w.decrease_indent();
+            w.line("} else {")?;
+            w.increase_indent();
+
+            if i != 0 {
+                w.line(r#"sql.push_str(", DEFAULT");"#)?;
+            } else {
+                w.line(r#"sql.push_str("DEFAULT");"#)?;
+            }
+
+            w.decrease_indent();
+            w.line("}")?;
+        } else if i != 0 {
+            w.line(format_args!("values.push(&self.{c});"))?;
+            w.line(r#"write!(sql, ", ${}", values.len()).unwrap();"#)?;
+        } else {
+            w.line(format_args!("values.push(&self.{c});"))?;
+            w.line(r#"write!(sql, "${}", values.len()).unwrap();"#)?;
+        }
+    }
+
+    w.blank_line()?;
+    w.line("sql.push(')');")?;
+
+    // Generate a call to execute.
+    w.blank_line()?;
+    w.line("client.execute(&sql, &values).await?;")?;
+    w.blank_line()?;
+    w.line("Ok(())")?;
+
+    w.decrease_indent();
+    w.line("}")?;
 
     Ok(())
 }

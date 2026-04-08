@@ -19,7 +19,9 @@ fn parse_with_valid() {
         out,
         r#"use porm::migration::Migration;
 use std::borrow::Cow;
+use std::fmt::Write;
 use std::time::SystemTime;
+use tokio_postgres::types::ToSql;
 use tokio_postgres::{Error, GenericClient};
 
 pub struct Foo<'a> {
@@ -62,6 +64,47 @@ impl<'a> FooBuilder<'a> {
     pub fn new() -> Self {
         Self { key: None, value: None, desc: None, disabled: None }
     }
+
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+        let mut sql = String::with_capacity(1024);
+        let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(4);
+
+        sql.push_str("INSERT INTO foo (key, value, desc, disabled) VALUES (");
+
+        if let Some(v) = &self.key {
+            values.push(v);
+            write!(sql, "${}", values.len()).unwrap();
+        } else {
+            sql.push_str("DEFAULT");
+        }
+
+        if let Some(v) = &self.value {
+            values.push(v);
+            write!(sql, ", ${}", values.len()).unwrap();
+        } else {
+            sql.push_str(", DEFAULT");
+        }
+
+        if let Some(v) = &self.desc {
+            values.push(v);
+            write!(sql, ", ${}", values.len()).unwrap();
+        } else {
+            sql.push_str(", DEFAULT");
+        }
+
+        if let Some(v) = &self.disabled {
+            values.push(v);
+            write!(sql, ", ${}", values.len()).unwrap();
+        } else {
+            sql.push_str(", DEFAULT");
+        }
+
+        sql.push(')');
+
+        client.execute(&sql, &values).await?;
+
+        Ok(())
+    }
 }
 
 pub struct Bar {
@@ -83,6 +126,26 @@ impl BarBuilder {
     pub fn new() -> Self {
         Self { bar: None }
     }
+
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+        let mut sql = String::with_capacity(1024);
+        let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(1);
+
+        sql.push_str("INSERT INTO bar (bar) VALUES (");
+
+        if let Some(v) = &self.bar {
+            values.push(v);
+            write!(sql, "${}", values.len()).unwrap();
+        } else {
+            sql.push_str("DEFAULT");
+        }
+
+        sql.push(')');
+
+        client.execute(&sql, &values).await?;
+
+        Ok(())
+    }
 }
 
 pub struct FooBar {
@@ -103,6 +166,26 @@ pub struct FooBarBuilder {
 impl FooBarBuilder {
     pub fn new() -> Self {
         Self { baz: None }
+    }
+
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+        let mut sql = String::with_capacity(1024);
+        let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(1);
+
+        sql.push_str("INSERT INTO foo_bar (baz) VALUES (");
+
+        if let Some(v) = &self.baz {
+            values.push(v);
+            write!(sql, "${}", values.len()).unwrap();
+        } else {
+            sql.push_str("DEFAULT");
+        }
+
+        sql.push(')');
+
+        client.execute(&sql, &values).await?;
+
+        Ok(())
     }
 }
 

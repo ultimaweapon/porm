@@ -69,6 +69,26 @@ impl<'a> FooBuilder<'a> {
         Self { key: None, value: None, desc: None, disabled: None }
     }
 
+    pub fn set_key(&mut self, v: i32) -> &mut Self {
+        self.key = Some(v);
+        self
+    }
+
+    pub fn set_value(&mut self, v: Option<i64>) -> &mut Self {
+        self.value = Some(v);
+        self
+    }
+
+    pub fn set_desc(&mut self, v: Option<&'a str>) -> &mut Self {
+        self.desc = Some(v);
+        self
+    }
+
+    pub fn set_disabled(&mut self, v: bool) -> &mut Self {
+        self.disabled = Some(v);
+        self
+    }
+
     pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Foo<'static>, Error> {
         let mut sql = String::with_capacity(1024);
         let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(4);
@@ -135,6 +155,11 @@ impl BarBuilder {
         Self { bar: None }
     }
 
+    pub fn set_bar(&mut self, v: Option<i16>) -> &mut Self {
+        self.bar = Some(v);
+        self
+    }
+
     pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Bar, Error> {
         let mut sql = String::with_capacity(1024);
         let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(1);
@@ -178,6 +203,11 @@ pub struct FooBarBuilder {
 impl FooBarBuilder {
     pub fn new() -> Self {
         Self { baz: None }
+    }
+
+    pub fn set_baz(&mut self, v: Option<SystemTime>) -> &mut Self {
+        self.baz = Some(v);
+        self
     }
 
     pub async fn create<T: GenericClient>(&self, client: &T) -> Result<FooBar, Error> {

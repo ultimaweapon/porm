@@ -623,6 +623,29 @@ fn generate(
         w.decrease_indent();
         w.line("}")?;
 
+        // Write setters for builder.
+        for (c, f) in &model.fields {
+            w.blank_line()?;
+
+            w.begin(format_args!("pub fn set_{c}(&mut self, v: "))?;
+
+            if f.nullable {
+                w.end(format_args!(
+                    "Option<{}>) -> &mut Self {{",
+                    f.ty.for_builder()
+                ))?;
+            } else {
+                w.end(format_args!("{}) -> &mut Self {{", f.ty.for_builder()))?;
+            }
+
+            w.increase_indent();
+            w.line(format_args!("self.{c} = Some(v);"))?;
+            w.line("self")?;
+            w.decrease_indent();
+
+            w.line("}")?;
+        }
+
         // Write create for builder.
         w.blank_line()?;
 

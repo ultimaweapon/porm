@@ -14,6 +14,7 @@ use pg_query::{Node, NodeEnum};
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::num::NonZero;
@@ -355,7 +356,7 @@ fn generate(
     w.line("use std::fmt::Write;")?;
     w.line("use std::time::SystemTime;")?;
     w.line("use tokio_postgres::types::ToSql;")?;
-    w.line("use tokio_postgres::{Error, GenericClient};")?;
+    w.line("use tokio_postgres::{Error, GenericClient, Row};")?;
 
     // Write models.
     for (table, model) in models {
@@ -493,48 +494,59 @@ fn generate(
             w.line("};")?;
             w.blank_line()?;
 
-            for (c, f) in &model.fields {
-                if f.nullable {
-                    w.line(format_args!(
-                        r#"let {} = r.try_get::<_, Option<{}>>("{}")?;"#,
-                        c,
-                        f.ty.for_retrieve(),
-                        c
-                    ))?;
-                } else {
-                    w.line(format_args!(
-                        r#"let {} = r.try_get::<_, {}>("{}")?;"#,
-                        c,
-                        f.ty.for_retrieve(),
-                        c
-                    ))?;
-                }
-            }
+            w.line("Self::from_row(r).map(Some)")?;
 
-            w.blank_line()?;
-            w.begin(r#"Ok(Some(Self { "#)?;
-
-            for (i, (n, f)) in model.fields.iter().enumerate() {
-                if i != 0 {
-                    w.append(", ")?;
-                }
-
-                if f.ty.is_cow() {
-                    if f.nullable {
-                        w.append(format_args!("{n}: {n}.map(Cow::Owned)"))?;
-                    } else {
-                        w.append(format_args!("{n}: Cow::Owned({n})"))?;
-                    }
-                } else {
-                    w.append(format_args!("{n}"))?;
-                }
-            }
-
-            w.end(" }))")?;
             w.decrease_indent();
 
             w.line("}")?;
         }
+
+        // Write from_row method.
+        w.blank_line()?;
+        w.line("fn from_row(r: Row) -> Result<Self, Error> {")?;
+        w.increase_indent();
+
+        for (c, f) in &model.fields {
+            if f.nullable {
+                w.line(format_args!(
+                    r#"let {} = r.try_get::<_, Option<{}>>("{}")?;"#,
+                    c,
+                    f.ty.for_retrieve(),
+                    c
+                ))?;
+            } else {
+                w.line(format_args!(
+                    r#"let {} = r.try_get::<_, {}>("{}")?;"#,
+                    c,
+                    f.ty.for_retrieve(),
+                    c
+                ))?;
+            }
+        }
+
+        w.blank_line()?;
+        w.begin(r#"Ok(Self { "#)?;
+
+        for (i, (n, f)) in model.fields.iter().enumerate() {
+            if i != 0 {
+                w.append(", ")?;
+            }
+
+            if f.ty.is_cow() {
+                if f.nullable {
+                    w.append(format_args!("{n}: {n}.map(Cow::Owned)"))?;
+                } else {
+                    w.append(format_args!("{n}: Cow::Owned({n})"))?;
+                }
+            } else {
+                w.append(format_args!("{n}"))?;
+            }
+        }
+
+        w.end(" })")?;
+
+        w.decrease_indent();
+        w.line("}")?;
 
         w.decrease_indent();
         w.line("}")?;
@@ -614,7 +626,7 @@ fn generate(
         // Write create for builder.
         w.blank_line()?;
 
-        generate_builder_create(&mut w, &table, &model)?;
+        generate_builder_create(&mut w, &name, &table, &model)?;
 
         w.decrease_indent();
         w.line("}")?;
@@ -663,13 +675,25 @@ fn generate(
 
 fn generate_builder_create<T>(
     w: &mut Writer<T>,
+    name: impl Display,
     table: &str,
     model: &Model,
 ) -> Result<(), std::io::Error>
 where
     T: Write,
 {
-    w.line("pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {")?;
+    if model.has_lifetime {
+        w.line(format_args!(
+            "pub async fn create<T: GenericClient>(&self, client: &T) -> Result<{}<'static>, Error> {{",
+            name
+        ))?;
+    } else {
+        w.line(format_args!(
+            "pub async fn create<T: GenericClient>(&self, client: &T) -> Result<{}, Error> {{",
+            name
+        ))?;
+    }
+
     w.increase_indent();
     w.line("let mut sql = String::with_capacity(1024);")?;
     w.line(format_args!(
@@ -729,13 +753,13 @@ where
     }
 
     w.blank_line()?;
-    w.line("sql.push(')');")?;
+    w.line(r#"sql.push_str(") RETURNING *");"#)?;
 
-    // Generate a call to execute.
+    // Generate a call to query_one.
     w.blank_line()?;
-    w.line("client.execute(&sql, &values).await?;")?;
-    w.blank_line()?;
-    w.line("Ok(())")?;
+    w.line(format_args!(
+        "client.query_one(&sql, &values).await.and_then({name}::from_row)"
+    ))?;
 
     w.decrease_indent();
     w.line("}")?;

@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::time::SystemTime;
 use tokio_postgres::types::ToSql;
-use tokio_postgres::{Error, GenericClient};
+use tokio_postgres::{Error, GenericClient, Row};
 
 pub struct Foo<'a> {
     pub key: i32,
@@ -44,12 +44,16 @@ impl<'a> Foo<'a> {
             None => return Ok(None),
         };
 
+        Self::from_row(r).map(Some)
+    }
+
+    fn from_row(r: Row) -> Result<Self, Error> {
         let key = r.try_get::<_, i32>("key")?;
         let value = r.try_get::<_, Option<i64>>("value")?;
         let desc = r.try_get::<_, Option<String>>("desc")?;
         let disabled = r.try_get::<_, bool>("disabled")?;
 
-        Ok(Some(Self { key, value, desc: desc.map(Cow::Owned), disabled }))
+        Ok(Self { key, value, desc: desc.map(Cow::Owned), disabled })
     }
 }
 
@@ -65,7 +69,7 @@ impl<'a> FooBuilder<'a> {
         Self { key: None, value: None, desc: None, disabled: None }
     }
 
-    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Foo<'static>, Error> {
         let mut sql = String::with_capacity(1024);
         let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(4);
 
@@ -99,11 +103,9 @@ impl<'a> FooBuilder<'a> {
             sql.push_str(", DEFAULT");
         }
 
-        sql.push(')');
+        sql.push_str(") RETURNING *");
 
-        client.execute(&sql, &values).await?;
-
-        Ok(())
+        client.query_one(&sql, &values).await.and_then(Foo::from_row)
     }
 }
 
@@ -116,6 +118,12 @@ impl Bar {
         client.execute("INSERT INTO bar (bar) VALUES ($1)", &[&self.bar]).await?;
         Ok(())
     }
+
+    fn from_row(r: Row) -> Result<Self, Error> {
+        let bar = r.try_get::<_, Option<i16>>("bar")?;
+
+        Ok(Self { bar })
+    }
 }
 
 pub struct BarBuilder {
@@ -127,7 +135,7 @@ impl BarBuilder {
         Self { bar: None }
     }
 
-    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Bar, Error> {
         let mut sql = String::with_capacity(1024);
         let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(1);
 
@@ -140,11 +148,9 @@ impl BarBuilder {
             sql.push_str("DEFAULT");
         }
 
-        sql.push(')');
+        sql.push_str(") RETURNING *");
 
-        client.execute(&sql, &values).await?;
-
-        Ok(())
+        client.query_one(&sql, &values).await.and_then(Bar::from_row)
     }
 }
 
@@ -157,6 +163,12 @@ impl FooBar {
         client.execute("INSERT INTO foo_bar (baz) VALUES ($1)", &[&self.baz]).await?;
         Ok(())
     }
+
+    fn from_row(r: Row) -> Result<Self, Error> {
+        let baz = r.try_get::<_, Option<SystemTime>>("baz")?;
+
+        Ok(Self { baz })
+    }
 }
 
 pub struct FooBarBuilder {
@@ -168,7 +180,7 @@ impl FooBarBuilder {
         Self { baz: None }
     }
 
-    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<FooBar, Error> {
         let mut sql = String::with_capacity(1024);
         let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(1);
 
@@ -181,11 +193,9 @@ impl FooBarBuilder {
             sql.push_str("DEFAULT");
         }
 
-        sql.push(')');
+        sql.push_str(") RETURNING *");
 
-        client.execute(&sql, &values).await?;
-
-        Ok(())
+        client.query_one(&sql, &values).await.and_then(FooBar::from_row)
     }
 }
 

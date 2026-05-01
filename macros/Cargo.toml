@@ -1,6 +1,9 @@
 [package]
 name = "porm-macros"
+description = "Procedural macros for Porm"
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ultimaweapon/porm"
 edition = "2024"
 
 [lib]

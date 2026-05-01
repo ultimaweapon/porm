@@ -639,7 +639,13 @@ fn generate(
             }
 
             w.increase_indent();
-            w.line(format_args!("self.{c} = Some(v);"))?;
+
+            if f.is_optional() {
+                w.line(format_args!("self.{c} = Some(v);"))?;
+            } else {
+                w.line(format_args!("self.{c} = v;"))?;
+            }
+
             w.line("self")?;
             w.decrease_indent();
 

@@ -32,7 +32,7 @@ pub struct Foo<'a> {
 }
 
 impl<'a> Foo<'a> {
-    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
         client.execute("INSERT INTO foo (key, value, desc, disabled) VALUES ($1, $2, $3, $4)", &[&self.key, &self.value, &self.desc, &self.disabled]).await?;
         Ok(())
     }
@@ -134,7 +134,7 @@ pub struct Bar {
 }
 
 impl Bar {
-    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
         client.execute("INSERT INTO bar (bar) VALUES ($1)", &[&self.bar]).await?;
         Ok(())
     }
@@ -184,7 +184,7 @@ pub struct FooBar {
 }
 
 impl FooBar {
-    pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
         client.execute("INSERT INTO foo_bar (baz) VALUES ($1)", &[&self.baz]).await?;
         Ok(())
     }

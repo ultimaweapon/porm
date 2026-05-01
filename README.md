@@ -5,6 +5,8 @@ Porm is a new type of ORM for PostgreSQL. Instead of defining some models in Rus
 ## Features
 
 - Lightweight.
+  - The generated models in a thin layer on top of [tokio-postgres](https://crates.io/crates/tokio-postgres) API.
+- Database is a single source of truth.
 - Built-in schema migration.
 - Use actual parser from PostgreSQL.
 

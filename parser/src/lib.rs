@@ -396,7 +396,7 @@ fn generate(
         w.increase_indent();
 
         // Write insert method.
-        w.line("pub async fn insert<T: GenericClient>(&self, client: &T) -> Result<(), Error> {")?;
+        w.line("pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {")?;
 
         w.increase_indent();
         w.begin(format_args!(r#"client.execute("INSERT INTO {table} ("#))?;

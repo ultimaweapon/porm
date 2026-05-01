@@ -1,4 +1,7 @@
 # Porm
+[![Crates.io Version](https://img.shields.io/crates/v/porm?label=porm)](https://crates.io/crates/porm)
+[![Crates.io Version](https://img.shields.io/crates/v/porm-macros?label=porm-macros)](https://crates.io/crates/porm-macros)
+[![Crates.io Version](https://img.shields.io/crates/v/porm-parser?label=porm-parser)](https://crates.io/crates/porm-parser)
 
 Porm is a new type of ORM for PostgreSQL. Instead of defining some models in Rust, Porm parse migration scripts and generate models from it.
 

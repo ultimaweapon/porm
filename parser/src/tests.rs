@@ -8,6 +8,7 @@ fn parse_with_valid() {
         "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
         "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
         "ALTER TABLE foo ADD disabled boolean NOT NULL DEFAULT FALSE;",
+        "ALTER TABLE bar ADD id uuid;",
     ];
 
     parse(&mut out, migrations).unwrap();
@@ -131,28 +132,31 @@ impl<'a> FooBuilder<'a> {
 
 pub struct Bar {
     pub bar: Option<i16>,
+    pub id: Option<::uuid::Uuid>,
 }
 
 impl Bar {
     pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
-        client.execute("INSERT INTO bar (bar) VALUES ($1)", &[&self.bar]).await?;
+        client.execute("INSERT INTO bar (bar, id) VALUES ($1, $2)", &[&self.bar, &self.id]).await?;
         Ok(())
     }
 
     fn from_row(r: Row) -> Result<Self, Error> {
         let bar = r.try_get::<_, Option<i16>>("bar")?;
+        let id = r.try_get::<_, Option<::uuid::Uuid>>("id")?;
 
-        Ok(Self { bar })
+        Ok(Self { bar, id })
     }
 }
 
 pub struct BarBuilder {
     bar: Option<Option<i16>>,
+    id: Option<Option<::uuid::Uuid>>,
 }
 
 impl BarBuilder {
     pub fn new() -> Self {
-        Self { bar: None }
+        Self { bar: None, id: None }
     }
 
     pub fn set_bar(&mut self, v: Option<i16>) -> &mut Self {
@@ -160,17 +164,29 @@ impl BarBuilder {
         self
     }
 
+    pub fn set_id(&mut self, v: Option<::uuid::Uuid>) -> &mut Self {
+        self.id = Some(v);
+        self
+    }
+
     pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Bar, Error> {
         let mut sql = String::with_capacity(1024);
-        let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(1);
+        let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(2);
 
-        sql.push_str("INSERT INTO bar (bar) VALUES (");
+        sql.push_str("INSERT INTO bar (bar, id) VALUES (");
 
         if let Some(v) = &self.bar {
             values.push(v);
             write!(sql, "${}", values.len()).unwrap();
         } else {
             sql.push_str("DEFAULT");
+        }
+
+        if let Some(v) = &self.id {
+            values.push(v);
+            write!(sql, ", ${}", values.len()).unwrap();
+        } else {
+            sql.push_str(", DEFAULT");
         }
 
         sql.push_str(") RETURNING *");
@@ -229,7 +245,7 @@ impl FooBarBuilder {
     }
 }
 
-pub static MIGRATIONS: [Migration; 3] = [
+pub static MIGRATIONS: [Migration; 4] = [
     Migration {
         name: None,
         script: "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
@@ -241,6 +257,10 @@ pub static MIGRATIONS: [Migration; 3] = [
     Migration {
         name: None,
         script: "ALTER TABLE foo ADD disabled boolean NOT NULL DEFAULT FALSE;",
+    },
+    Migration {
+        name: None,
+        script: "ALTER TABLE bar ADD id uuid;",
     },
 ];
 "#

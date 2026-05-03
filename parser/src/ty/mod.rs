@@ -7,6 +7,7 @@ pub enum Type {
     SmallInt,
     Text,
     TimestampWithTz,
+    Uuid,
 }
 
 impl Type {
@@ -18,6 +19,7 @@ impl Type {
             Self::SmallInt => "i16",
             Self::Text => "Cow<'a, str>",
             Self::TimestampWithTz => "SystemTime",
+            Self::Uuid => "::uuid::Uuid",
         }
     }
 
@@ -29,6 +31,7 @@ impl Type {
             Self::SmallInt => "i16",
             Self::Text => "&'a str",
             Self::TimestampWithTz => "SystemTime",
+            Self::Uuid => "::uuid::Uuid",
         }
     }
 
@@ -40,6 +43,7 @@ impl Type {
             Self::SmallInt => "i16",
             Self::Text => "&str",
             Self::TimestampWithTz => "&SystemTime",
+            Self::Uuid => "::uuid::Uuid",
         }
     }
 
@@ -52,6 +56,7 @@ impl Type {
             Self::SmallInt => "i16",
             Self::Text => "String",
             Self::TimestampWithTz => "SystemTime",
+            Self::Uuid => "::uuid::Uuid",
         }
     }
 
@@ -64,6 +69,7 @@ impl Type {
             Self::SmallInt => true,
             Self::Text => true,
             Self::TimestampWithTz => false,
+            Self::Uuid => true,
         }
     }
 
@@ -76,6 +82,7 @@ impl Type {
             Self::SmallInt => false,
             Self::Text => true,
             Self::TimestampWithTz => false,
+            Self::Uuid => false,
         }
     }
 }

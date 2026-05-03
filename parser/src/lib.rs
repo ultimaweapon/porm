@@ -323,6 +323,7 @@ fn parse_column_type(model: &mut Model, nodes: Vec<Node>) -> Type {
 
             Type::Text
         }
+        "uuid" => Type::Uuid,
         v => todo!("{v}"),
     }
 }

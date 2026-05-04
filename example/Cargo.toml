@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 porm = { path = ".." }
+tokio = { version = "1.52.1", features = ["rt"] }
 tokio-postgres = "0.7.17"
 
 [build-dependencies]

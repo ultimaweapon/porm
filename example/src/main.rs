@@ -1,4 +1,4 @@
-use self::db::PostsBuilder;
+use self::db::{Post, PostBuilder};
 use tokio_postgres::NoTls;
 
 mod db;
@@ -27,12 +27,19 @@ async fn run() {
         .unwrap();
 
     // Test builder.
-    let post = PostsBuilder::new("Foo", "Bar.").create(&pg).await.unwrap();
+    let p = PostBuilder::new("Foo", "Bar.").create(&pg).await.unwrap();
 
-    assert_eq!(post.id, 1);
-    assert_eq!(post.title, "Foo");
-    assert_eq!(post.body, "Bar.");
-    assert!(!post.published);
+    assert_eq!(p.id, 1);
+    assert_eq!(p.title, "Foo");
+    assert_eq!(p.body, "Bar.");
+    assert!(!p.published);
+
+    // Test find.
+    let p1 = Post::find(&pg, 1).await.unwrap().unwrap();
+    let p2 = Post::find(&pg, 2).await.unwrap();
+
+    assert_eq!(p1.title, "Foo");
+    assert!(p2.is_none());
 
     // Shutdown.
     drop(pg);

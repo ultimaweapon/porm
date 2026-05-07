@@ -1,4 +1,5 @@
 use self::db::{Post, PostBuilder};
+use futures::TryStreamExt;
 use tokio_postgres::NoTls;
 
 mod db;
@@ -40,6 +41,16 @@ async fn run() {
 
     assert_eq!(p1.title, "Foo");
     assert!(p2.is_none());
+
+    // Test select.
+    let mut it1 = Post::select_by_published(&pg, true).await.unwrap();
+    let mut it2 = Post::select_by_published(&pg, false).await.unwrap();
+    let p = it2.try_next().await.unwrap().unwrap();
+
+    assert_eq!(p.id, 1);
+
+    assert!(it1.try_next().await.unwrap().is_none());
+    assert!(it2.try_next().await.unwrap().is_none());
 
     // Shutdown.
     drop(pg);

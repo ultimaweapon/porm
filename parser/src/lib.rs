@@ -570,7 +570,7 @@ fn generate(
             w.blank_line()?;
             w.begin("pub async fn select_by")?;
 
-            for (i, c) in cols.into_iter().enumerate() {
+            for (i, c) in cols.iter().enumerate() {
                 if i != 0 {
                     w.append("_and")?;
                 }
@@ -599,7 +599,7 @@ fn generate(
                 r#"let f = client.query_raw("SELECT * FROM {table} WHERE"#
             ))?;
 
-            for (i, c) in cols.into_iter().enumerate() {
+            for (i, c) in cols.iter().enumerate() {
                 if i != 0 {
                     w.append(" AND")?;
                 }
@@ -609,7 +609,7 @@ fn generate(
 
             w.append(r#"", ["#)?;
 
-            for (i, c) in cols.into_iter().enumerate() {
+            for (i, c) in cols.iter().enumerate() {
                 let f = m.fields.get(&c.column).unwrap();
 
                 if i != 0 {

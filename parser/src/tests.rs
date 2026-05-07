@@ -9,6 +9,7 @@ fn parse_with_valid() {
         "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
         "ALTER TABLE foo ADD disabled boolean NOT NULL DEFAULT FALSE;",
         "ALTER TABLE bar ADD id uuid;",
+        "CREATE INDEX ON foo USING hash (value);",
     ];
 
     parse(&mut out, migrations).unwrap();
@@ -18,9 +19,11 @@ fn parse_with_valid() {
 
     assert_eq!(
         out,
-        r#"use porm::migration::Migration;
+        r#"use futures::{Stream, TryStreamExt};
+use porm::migration::Migration;
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::pin::{Pin, pin};
 use std::time::SystemTime;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Error, GenericClient, Row};
@@ -46,6 +49,12 @@ impl<'a> Foo<'a> {
         };
 
         Self::from_row(r).map(Some)
+    }
+
+    pub async fn select_by_value<T: GenericClient>(client: &T, value: Option<i64>) -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<>>>, Error> {
+        let f = client.query_raw("SELECT * FROM foo WHERE value = $1", [&value]).await?.and_then(|r| Self::from_row(r).map_or_else(futures::future::err, futures::future::ok));
+
+        Ok(Box::pin(f))
     }
 
     fn from_row(r: Row) -> Result<Self, Error> {
@@ -245,7 +254,7 @@ impl FooBarBuilder {
     }
 }
 
-pub static MIGRATIONS: [Migration; 4] = [
+pub static MIGRATIONS: [Migration; 5] = [
     Migration {
         name: None,
         script: "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
@@ -261,6 +270,10 @@ pub static MIGRATIONS: [Migration; 4] = [
     Migration {
         name: None,
         script: "ALTER TABLE bar ADD id uuid;",
+    },
+    Migration {
+        name: None,
+        script: "CREATE INDEX ON foo USING hash (value);",
     },
 ];
 "#

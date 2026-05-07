@@ -4,12 +4,14 @@
 pub use self::error::*;
 
 use self::migration::Migration;
-use self::model::{Field, Model};
+use self::model::{Field, Index, IndexMember, Model};
 use self::ty::Type;
 use self::writer::Writer;
 use heck::AsUpperCamelCase;
 use memchr::Memchr;
-use pg_query::protobuf::{AlterTableStmt, AlterTableType, ColumnDef, ConstrType, CreateStmt};
+use pg_query::protobuf::{
+    AlterTableStmt, AlterTableType, ColumnDef, ConstrType, CreateStmt, IndexStmt,
+};
 use pg_query::{Node, NodeEnum};
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
@@ -18,7 +20,6 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::num::NonZero;
-use std::ops::Index;
 use std::path::{MAIN_SEPARATOR, Path};
 
 pub mod migration;
@@ -144,12 +145,14 @@ where
             let mut cx = Context {
                 models: &mut models,
                 script: &script,
+                stmt_location: stmt.stmt_location,
             };
 
             // Process.
             let r = match node {
                 NodeEnum::CreateStmt(n) => parse_create_stmt(&mut cx, &name, version, n),
                 NodeEnum::AlterTableStmt(n) => parse_alter_table_stmt(&mut cx, &name, version, n),
+                NodeEnum::IndexStmt(n) => parse_index_stmt(&mut cx, &name, version, n),
                 _ => continue,
             };
 
@@ -236,6 +239,7 @@ fn parse_alter_table_stmt(
     mv: usize,
     node: AlterTableStmt,
 ) -> Option<Result<(), ParseError>> {
+    // Get target model.
     let table = node.relation?.relname;
     let model = match cx.models.get_mut(&table) {
         Some(v) => v,
@@ -262,6 +266,51 @@ fn parse_alter_table_stmt(
             _ => continue,
         }
     }
+
+    Some(Ok(()))
+}
+
+fn parse_index_stmt(
+    cx: &mut Context,
+    mn: &Option<String>,
+    mv: usize,
+    node: Box<IndexStmt>,
+) -> Option<Result<(), ParseError>> {
+    // Get target model.
+    let table = node.relation?.relname;
+    let model = match cx.models.get_mut(&table) {
+        Some(v) => v,
+        None => return Some(Err(ParseError::UnknownTable(mn.clone(), mv, table))),
+    };
+
+    // Parse columns.
+    let mut columns = Vec::with_capacity(node.index_params.len());
+
+    for param in node.index_params {
+        let param = match param.node {
+            Some(NodeEnum::IndexElem(n)) => n,
+            _ => continue,
+        };
+
+        // Check if column exists.
+        let column = param.name;
+
+        if !model.fields.contains_key(&column) {
+            return Some(Err(ParseError::UnknownColumn(
+                mn.clone(),
+                mv,
+                cx.get_line(cx.stmt_location),
+                column,
+            )));
+        }
+
+        columns.push(IndexMember { column });
+    }
+
+    model.indexes.push(Index {
+        columns,
+        unique: node.unique,
+    });
 
     Some(Ok(()))
 }
@@ -352,21 +401,23 @@ fn generate(
     // Generate preamble.
     let mut w = Writer::new(out);
 
+    w.line("use futures::{Stream, TryStreamExt};")?;
     w.line("use porm::migration::Migration;")?;
     w.line("use std::borrow::Cow;")?;
     w.line("use std::fmt::Write;")?;
+    w.line("use std::pin::{Pin, pin};")?;
     w.line("use std::time::SystemTime;")?;
     w.line("use tokio_postgres::types::ToSql;")?;
     w.line("use tokio_postgres::{Error, GenericClient, Row};")?;
 
     // Write models.
-    for (table, model) in models {
+    for (table, m) in models {
         let name = AsUpperCamelCase(&table);
 
         w.blank_line()?;
         w.begin(format_args!(r#"pub struct {}"#, name))?;
 
-        if model.has_lifetime {
+        if m.has_lifetime {
             w.end("<'a> {")?;
         } else {
             w.end(" {")?;
@@ -374,7 +425,7 @@ fn generate(
 
         w.increase_indent();
 
-        for (c, f) in &model.fields {
+        for (c, f) in &m.fields {
             w.begin(format_args!(r#"pub {c}: "#))?;
 
             if f.nullable {
@@ -388,7 +439,7 @@ fn generate(
         w.line(r#"}"#)?;
         w.blank_line()?;
 
-        if model.has_lifetime {
+        if m.has_lifetime {
             w.line(format_args!("impl<'a> {name}<'a> {{"))?;
         } else {
             w.line(format_args!("impl {name} {{"))?;
@@ -396,13 +447,13 @@ fn generate(
 
         w.increase_indent();
 
-        // Write insert method.
+        // Write create method.
         w.line("pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {")?;
 
         w.increase_indent();
         w.begin(format_args!(r#"client.execute("INSERT INTO {table} ("#))?;
 
-        for (i, c) in model.fields.keys().enumerate() {
+        for (i, c) in m.fields.keys().enumerate() {
             if i != 0 {
                 w.append(", ")?;
             }
@@ -412,7 +463,7 @@ fn generate(
 
         w.append(") VALUES (")?;
 
-        for (i, n) in (1..=model.fields.len()).enumerate() {
+        for (i, n) in (1..=m.fields.len()).enumerate() {
             if i != 0 {
                 w.append(", ")?;
             }
@@ -422,7 +473,7 @@ fn generate(
 
         w.append(r#")", &["#)?;
 
-        for (i, c) in model.fields.keys().enumerate() {
+        for (i, c) in m.fields.keys().enumerate() {
             if i != 0 {
                 w.append(", ")?;
             }
@@ -438,12 +489,12 @@ fn generate(
         w.line("}")?;
 
         // Write find method.
-        if !model.primary_key.is_empty() {
+        if !m.primary_key.is_empty() {
             w.blank_line()?;
             w.begin("pub async fn find<T: GenericClient>(client: &T")?;
 
-            for c in &model.primary_key {
-                let f = model.fields.get(c).unwrap();
+            for c in &m.primary_key {
+                let f = m.fields.get(c).unwrap();
 
                 if f.nullable {
                     w.append(format_args!(", {}: Option<{}>", c, f.ty.for_param()))?;
@@ -460,7 +511,7 @@ fn generate(
                 table
             ))?;
 
-            for (i, c) in model.primary_key.iter().enumerate() {
+            for (i, c) in m.primary_key.iter().enumerate() {
                 if i != 0 {
                     w.append("AND ")?;
                 }
@@ -470,8 +521,8 @@ fn generate(
 
             w.append(r#"", &["#)?;
 
-            for (i, c) in model.primary_key.iter().enumerate() {
-                let f = model.fields.get(c).unwrap();
+            for (i, c) in m.primary_key.iter().enumerate() {
+                let f = m.fields.get(c).unwrap();
 
                 if i != 0 {
                     w.append(", ")?;
@@ -502,12 +553,91 @@ fn generate(
             w.line("}")?;
         }
 
+        // Write select methods.
+        for idx in &m.indexes {
+            let cols = if idx.unique {
+                let end = idx.columns.len();
+
+                if end == 1 {
+                    continue;
+                }
+
+                &idx.columns[..(end - 1)]
+            } else {
+                &idx.columns
+            };
+
+            w.blank_line()?;
+            w.begin("pub async fn select_by")?;
+
+            for (i, c) in cols.into_iter().enumerate() {
+                if i != 0 {
+                    w.append("_and")?;
+                }
+
+                w.append(format_args!("_{}", c.column))?;
+            }
+
+            w.append("<T: GenericClient>(client: &T")?;
+
+            for c in cols {
+                let f = m.fields.get(&c.column).unwrap();
+
+                if f.nullable {
+                    w.append(format_args!(", {}: Option<{}>", c.column, f.ty.for_param()))?;
+                } else {
+                    w.append(format_args!(", {}: {}", c.column, f.ty.for_param()))?;
+                }
+            }
+
+            w.end(
+                ") -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<>>>, Error> {",
+            )?;
+            w.increase_indent();
+
+            w.begin(format_args!(
+                r#"let f = client.query_raw("SELECT * FROM {table} WHERE"#
+            ))?;
+
+            for (i, c) in cols.into_iter().enumerate() {
+                if i != 0 {
+                    w.append(" AND")?;
+                }
+
+                w.append(format_args!(" {} = ${}", c.column, i + 1))?;
+            }
+
+            w.append(r#"", ["#)?;
+
+            for (i, c) in cols.into_iter().enumerate() {
+                let f = m.fields.get(&c.column).unwrap();
+
+                if i != 0 {
+                    w.append(", ")?;
+                }
+
+                if f.nullable || f.ty.pass_by_ref() {
+                    w.append(format_args!("&{}", c.column))?;
+                } else {
+                    w.append(c.column.as_str())?;
+                }
+            }
+
+            w.end("]).await?.and_then(|r| Self::from_row(r).map_or_else(futures::future::err, futures::future::ok));")?;
+
+            w.blank_line()?;
+            w.line("Ok(Box::pin(f))")?;
+
+            w.decrease_indent();
+            w.line("}")?;
+        }
+
         // Write from_row method.
         w.blank_line()?;
         w.line("fn from_row(r: Row) -> Result<Self, Error> {")?;
         w.increase_indent();
 
-        for (c, f) in &model.fields {
+        for (c, f) in &m.fields {
             if f.nullable {
                 w.line(format_args!(
                     r#"let {} = r.try_get::<_, Option<{}>>("{}")?;"#,
@@ -528,7 +658,7 @@ fn generate(
         w.blank_line()?;
         w.begin(r#"Ok(Self { "#)?;
 
-        for (i, (n, f)) in model.fields.iter().enumerate() {
+        for (i, (n, f)) in m.fields.iter().enumerate() {
             if i != 0 {
                 w.append(", ")?;
             }
@@ -555,7 +685,7 @@ fn generate(
         // Write builder struct.
         w.blank_line()?;
 
-        if model.has_lifetime {
+        if m.has_lifetime {
             w.line(format_args!("pub struct {name}Builder<'a> {{"))?;
         } else {
             w.line(format_args!("pub struct {name}Builder {{"))?;
@@ -563,7 +693,7 @@ fn generate(
 
         w.increase_indent();
 
-        for (c, f) in &model.fields {
+        for (c, f) in &m.fields {
             w.begin(format_args!(r#"{c}: "#))?;
 
             if f.nullable {
@@ -580,7 +710,7 @@ fn generate(
 
         w.blank_line()?;
 
-        if model.has_lifetime {
+        if m.has_lifetime {
             w.line(format_args!("impl<'a> {name}Builder<'a> {{"))?;
         } else {
             w.line(format_args!("impl {name}Builder {{"))?;
@@ -591,7 +721,7 @@ fn generate(
         // Write new for builder.
         w.begin("pub fn new(")?;
 
-        for (i, (c, f)) in model
+        for (i, (c, f)) in m
             .fields
             .iter()
             .filter(|(_, f)| !f.is_optional())
@@ -608,7 +738,7 @@ fn generate(
         w.increase_indent();
         w.begin("Self { ")?;
 
-        for (i, (c, f)) in model.fields.iter().enumerate() {
+        for (i, (c, f)) in m.fields.iter().enumerate() {
             if i != 0 {
                 w.append(", ")?;
             }
@@ -625,7 +755,7 @@ fn generate(
         w.line("}")?;
 
         // Write setters for builder.
-        for (c, f) in &model.fields {
+        for (c, f) in &m.fields {
             w.blank_line()?;
 
             w.begin(format_args!("pub fn set_{c}(&mut self, v: "))?;
@@ -656,7 +786,7 @@ fn generate(
         // Write create for builder.
         w.blank_line()?;
 
-        generate_builder_create(&mut w, &name, &table, &model)?;
+        generate_builder_create(&mut w, &name, &table, &m)?;
 
         w.decrease_indent();
         w.line("}")?;
@@ -801,10 +931,13 @@ where
 struct Context<'a> {
     models: &'a mut FxHashMap<String, Model>,
     script: &'a str,
+    stmt_location: i32,
 }
 
 impl<'a> Context<'a> {
     fn get_line(&self, loc: i32) -> NonZero<u32> {
+        use std::ops::Index;
+
         let loc = usize::try_from(loc).unwrap();
         let script = self.script.as_bytes().index(..loc);
         let ln = Memchr::new(b'\n', script).count() + 1;

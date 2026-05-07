@@ -28,8 +28,8 @@
 //! Replace `PATH_TO_MIGRATION_SCRIPTS` with path to the directory to have created.
 //!
 //! ## Include generated models
-//! Add [porm](https://crates.io/crates/porm) as a dependency and create a module with the following
-//! content:
+//! Add [porm](https://crates.io/crates/porm) and [futures](https://crates.io/crates/futures) as a
+//! dependency and create a module with the following content:
 //!
 //! ```ignore
 //! #![allow(unused)]

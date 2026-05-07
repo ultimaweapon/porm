@@ -11,6 +11,7 @@ mod column;
 mod constraint;
 
 /// Reason why [crate::parse()] fails.
+#[non_exhaustive]
 pub enum ParseError {
     /// Couldn't read directory.
     ReadDirectory(std::io::Error),
@@ -30,6 +31,8 @@ pub enum ParseError {
     UnknownTable(Option<String>, usize, String),
     /// Failed to parse column.
     Column(Option<String>, usize, NonZero<u32>, ColumnError),
+    /// Migration contains unknown column.
+    UnknownColumn(Option<String>, usize, NonZero<u32>, String),
     /// Failed to parse table constraint.
     TableConstraint(Option<String>, usize, NonZero<u32>, ConstraintError),
     /// Couldn't write generated code.
@@ -88,6 +91,13 @@ impl Display for ParseError {
                 None => write!(
                     f,
                     "couldn't parse column at line {l} on migration version {v}"
+                ),
+            },
+            Self::UnknownColumn(n, v, l, c) => match n {
+                Some(n) => write!(f, "unknown column '{c}' at line {l} from migration '{n}'"),
+                None => write!(
+                    f,
+                    "unknown column '{c}' at line {l} from migration version {v}"
                 ),
             },
             Self::TableConstraint(n, v, l, _) => match n {
@@ -149,6 +159,13 @@ impl Debug for ParseError {
                 .field(v)
                 .field(l)
                 .field(e)
+                .finish(),
+            Self::UnknownColumn(n, v, l, c) => f
+                .debug_tuple("UnknownColumn")
+                .field(n)
+                .field(v)
+                .field(l)
+                .field(c)
                 .finish(),
             Self::TableConstraint(n, v, l, e) => f
                 .debug_tuple("TableConstraint")

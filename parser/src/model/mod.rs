@@ -1,14 +1,19 @@
+pub use self::index::*;
+
 use crate::ConstraintError;
 use crate::ty::Type;
 use indexmap::IndexMap;
 use pg_query::NodeEnum;
 use pg_query::protobuf::{ConstrType, Constraint};
 
+mod index;
+
 /// Contains information for a model.
 #[derive(Default)]
 pub struct Model {
     pub fields: IndexMap<String, Field>,
     pub primary_key: Vec<String>,
+    pub indexes: Vec<Index>,
     pub has_lifetime: bool,
 }
 
@@ -39,7 +44,7 @@ impl Model {
     }
 }
 
-/// Contains information for a field in model.
+/// Contains information for a field in the model.
 pub struct Field {
     pub ty: Type,
     pub nullable: bool,

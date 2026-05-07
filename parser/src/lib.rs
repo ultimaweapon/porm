@@ -590,9 +590,12 @@ fn generate(
                 }
             }
 
-            w.end(
-                ") -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<>>>, Error> {",
-            )?;
+            if m.has_lifetime {
+                w.end(") -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<'a, T>>>, Error> {")?;
+            } else {
+                w.end(") -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<T>>>, Error> {")?;
+            }
+
             w.increase_indent();
 
             w.begin(format_args!(

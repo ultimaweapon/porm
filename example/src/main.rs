@@ -1,3 +1,4 @@
+use self::db::PostsBuilder;
 use tokio_postgres::NoTls;
 
 mod db;
@@ -24,6 +25,14 @@ async fn run() {
     porm::migration::migrate(&pg, logger, history_table, &self::db::MIGRATIONS)
         .await
         .unwrap();
+
+    // Test builder.
+    let post = PostsBuilder::new("Foo", "Bar.").create(&pg).await.unwrap();
+
+    assert_eq!(post.id, 1);
+    assert_eq!(post.title, "Foo");
+    assert_eq!(post.body, "Bar.");
+    assert!(!post.published);
 
     // Shutdown.
     drop(pg);

@@ -51,7 +51,7 @@ impl<'a> Foo<'a> {
         Self::from_row(r).map(Some)
     }
 
-    pub async fn select_by_value<T: GenericClient>(client: &T, value: Option<i64>) -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<>>>, Error> {
+    pub async fn select_by_value<T: GenericClient>(client: &T, value: Option<i64>) -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<'a, T>>>, Error> {
         let f = client.query_raw("SELECT * FROM foo WHERE value = $1", [&value]).await?.and_then(|r| Self::from_row(r).map_or_else(futures::future::err, futures::future::ok));
 
         Ok(Box::pin(f))

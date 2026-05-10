@@ -27,7 +27,7 @@ async fn run() {
         .await
         .unwrap();
 
-    // Test builder.
+    // Insert with default values.
     let p = PostBuilder::new("Foo", "Bar.").create(&pg).await.unwrap();
 
     assert_eq!(p.id, 1);
@@ -35,14 +35,14 @@ async fn run() {
     assert_eq!(p.body, "Bar.");
     assert!(!p.published);
 
-    // Test find.
+    // Find by primary key or unique index.
     let p1 = Post::find(&pg, 1).await.unwrap().unwrap();
     let p2 = Post::find(&pg, 2).await.unwrap();
 
     assert_eq!(p1.title, "Foo");
     assert!(p2.is_none());
 
-    // Test select.
+    // Select with index.
     let mut it1 = Post::select_by_published(&pg, true).await.unwrap();
     let mut it2 = Post::select_by_published(&pg, false).await.unwrap();
     let p = it2.try_next().await.unwrap().unwrap();

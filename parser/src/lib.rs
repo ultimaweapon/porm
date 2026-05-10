@@ -734,7 +734,7 @@ fn generate(
                 w.append(", ")?;
             }
 
-            w.end(format_args!(r#"{}: {}"#, c, f.ty.for_builder()))?;
+            w.append(format_args!(r#"{}: {}"#, c, f.ty.for_builder()))?;
         }
 
         w.end(") -> Self {")?;

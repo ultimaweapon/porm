@@ -1,15 +1,16 @@
 use crate::parse;
+use pretty_assertions::assert_str_eq;
 
 #[test]
 fn parse_with_valid() {
     // Parse.
     let mut out = Vec::new();
     let migrations = [
-        "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
-        "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
-        "ALTER TABLE foo ADD disabled boolean NOT NULL DEFAULT FALSE;",
-        "ALTER TABLE bar ADD id uuid;",
-        "CREATE INDEX ON foo USING hash (value);",
+        "CREATE TABLE account (id serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (id));",
+        "CREATE TABLE blog (id serial NOT NULL, owner integer NOT NULL, FOREIGN KEY (owner) REFERENCES account (id));",
+        "CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+        "ALTER TABLE account ADD disabled boolean NOT NULL DEFAULT FALSE;",
+        "CREATE INDEX ON account USING hash (value);",
     ];
 
     parse(&mut out, migrations).unwrap();
@@ -17,7 +18,7 @@ fn parse_with_valid() {
     // Check output.
     let out = String::from_utf8(out).unwrap();
 
-    assert_eq!(
+    assert_str_eq!(
         out,
         r#"use futures::{Stream, TryStreamExt};
 use porm::migration::Migration;
@@ -28,21 +29,21 @@ use std::time::SystemTime;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Error, GenericClient, Row};
 
-pub struct Foo<'a> {
-    pub key: i32,
+pub struct Account<'a> {
+    pub id: i32,
     pub value: Option<i64>,
     pub desc: Option<Cow<'a, str>>,
     pub disabled: bool,
 }
 
-impl<'a> Foo<'a> {
+impl<'a> Account<'a> {
     pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
-        client.execute("INSERT INTO foo (key, value, desc, disabled) VALUES ($1, $2, $3, $4)", &[&self.key, &self.value, &self.desc, &self.disabled]).await?;
+        client.execute("INSERT INTO account (id, value, desc, disabled) VALUES ($1, $2, $3, $4)", &[&self.id, &self.value, &self.desc, &self.disabled]).await?;
         Ok(())
     }
 
-    pub async fn find<T: GenericClient>(client: &T, key: i32) -> Result<Option<Self>, Error> {
-        let r = client.query_opt("SELECT * FROM foo WHERE key = $1", &[&key]).await?;
+    pub async fn find<T: GenericClient>(client: &T, id: i32) -> Result<Option<Self>, Error> {
+        let r = client.query_opt("SELECT * FROM account WHERE id = $1", &[&id]).await?;
         let r = match r {
             Some(v) => v,
             None => return Ok(None),
@@ -52,35 +53,35 @@ impl<'a> Foo<'a> {
     }
 
     pub async fn select_by_value<T: GenericClient>(client: &T, value: Option<i64>) -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<'a, T>>>, Error> {
-        let f = client.query_raw("SELECT * FROM foo WHERE value = $1", [&value]).await?.and_then(|r| Self::from_row(r).map_or_else(futures::future::err, futures::future::ok));
+        let f = client.query_raw("SELECT * FROM account WHERE value = $1", [&value]).await?.and_then(|r| Self::from_row(r).map_or_else(futures::future::err, futures::future::ok));
 
         Ok(Box::pin(f))
     }
 
     fn from_row(r: Row) -> Result<Self, Error> {
-        let key = r.try_get::<_, i32>("key")?;
+        let id = r.try_get::<_, i32>("id")?;
         let value = r.try_get::<_, Option<i64>>("value")?;
         let desc = r.try_get::<_, Option<String>>("desc")?;
         let disabled = r.try_get::<_, bool>("disabled")?;
 
-        Ok(Self { key, value, desc: desc.map(Cow::Owned), disabled })
+        Ok(Self { id, value, desc: desc.map(Cow::Owned), disabled })
     }
 }
 
-pub struct FooBuilder<'a> {
-    key: Option<i32>,
+pub struct AccountBuilder<'a> {
+    id: Option<i32>,
     value: Option<Option<i64>>,
     desc: Option<Option<&'a str>>,
     disabled: Option<bool>,
 }
 
-impl<'a> FooBuilder<'a> {
+impl<'a> AccountBuilder<'a> {
     pub fn new() -> Self {
-        Self { key: None, value: None, desc: None, disabled: None }
+        Self { id: None, value: None, desc: None, disabled: None }
     }
 
-    pub fn set_key(&mut self, v: i32) -> &mut Self {
-        self.key = Some(v);
+    pub fn set_id(&mut self, v: i32) -> &mut Self {
+        self.id = Some(v);
         self
     }
 
@@ -99,13 +100,13 @@ impl<'a> FooBuilder<'a> {
         self
     }
 
-    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Foo<'static>, Error> {
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Account<'static>, Error> {
         let mut sql = String::with_capacity(1024);
         let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(4);
 
-        sql.push_str("INSERT INTO foo (key, value, desc, disabled) VALUES (");
+        sql.push_str("INSERT INTO account (id, value, desc, disabled) VALUES (");
 
-        if let Some(v) = &self.key {
+        if let Some(v) = &self.id {
             values.push(v);
             write!(sql, "${}", values.len()).unwrap();
         } else {
@@ -135,72 +136,68 @@ impl<'a> FooBuilder<'a> {
 
         sql.push_str(") RETURNING *");
 
-        client.query_one(&sql, &values).await.and_then(Foo::from_row)
+        client.query_one(&sql, &values).await.and_then(Account::from_row)
     }
 }
 
-pub struct Bar {
-    pub bar: Option<i16>,
-    pub id: Option<::uuid::Uuid>,
+pub struct Blog {
+    pub id: i32,
+    pub owner: i32,
 }
 
-impl Bar {
+impl Blog {
     pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {
-        client.execute("INSERT INTO bar (bar, id) VALUES ($1, $2)", &[&self.bar, &self.id]).await?;
+        client.execute("INSERT INTO blog (id, owner) VALUES ($1, $2)", &[&self.id, &self.owner]).await?;
         Ok(())
     }
 
     fn from_row(r: Row) -> Result<Self, Error> {
-        let bar = r.try_get::<_, Option<i16>>("bar")?;
-        let id = r.try_get::<_, Option<::uuid::Uuid>>("id")?;
+        let id = r.try_get::<_, i32>("id")?;
+        let owner = r.try_get::<_, i32>("owner")?;
 
-        Ok(Self { bar, id })
+        Ok(Self { id, owner })
     }
 }
 
-pub struct BarBuilder {
-    bar: Option<Option<i16>>,
-    id: Option<Option<::uuid::Uuid>>,
+pub struct BlogBuilder {
+    id: Option<i32>,
+    owner: i32,
 }
 
-impl BarBuilder {
-    pub fn new() -> Self {
-        Self { bar: None, id: None }
+impl BlogBuilder {
+    pub fn new(owner: i32) -> Self {
+        Self { id: None, owner }
     }
 
-    pub fn set_bar(&mut self, v: Option<i16>) -> &mut Self {
-        self.bar = Some(v);
-        self
-    }
-
-    pub fn set_id(&mut self, v: Option<::uuid::Uuid>) -> &mut Self {
+    pub fn set_id(&mut self, v: i32) -> &mut Self {
         self.id = Some(v);
         self
     }
 
-    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Bar, Error> {
+    pub fn set_owner(&mut self, v: i32) -> &mut Self {
+        self.owner = v;
+        self
+    }
+
+    pub async fn create<T: GenericClient>(&self, client: &T) -> Result<Blog, Error> {
         let mut sql = String::with_capacity(1024);
         let mut values = Vec::<&(dyn ToSql + Sync)>::with_capacity(2);
 
-        sql.push_str("INSERT INTO bar (bar, id) VALUES (");
+        sql.push_str("INSERT INTO blog (id, owner) VALUES (");
 
-        if let Some(v) = &self.bar {
+        if let Some(v) = &self.id {
             values.push(v);
             write!(sql, "${}", values.len()).unwrap();
         } else {
             sql.push_str("DEFAULT");
         }
 
-        if let Some(v) = &self.id {
-            values.push(v);
-            write!(sql, ", ${}", values.len()).unwrap();
-        } else {
-            sql.push_str(", DEFAULT");
-        }
+        values.push(&self.owner);
+        write!(sql, ", ${}", values.len()).unwrap();
 
         sql.push_str(") RETURNING *");
 
-        client.query_one(&sql, &values).await.and_then(Bar::from_row)
+        client.query_one(&sql, &values).await.and_then(Blog::from_row)
     }
 }
 
@@ -257,23 +254,23 @@ impl FooBarBuilder {
 pub static MIGRATIONS: [Migration; 5] = [
     Migration {
         name: None,
-        script: "CREATE TABLE foo (key serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (key));",
+        script: "CREATE TABLE account (id serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (id));",
     },
     Migration {
         name: None,
-        script: "CREATE TABLE bar (bar smallint);CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
+        script: "CREATE TABLE blog (id serial NOT NULL, owner integer NOT NULL, FOREIGN KEY (owner) REFERENCES account (id));",
     },
     Migration {
         name: None,
-        script: "ALTER TABLE foo ADD disabled boolean NOT NULL DEFAULT FALSE;",
+        script: "CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
     },
     Migration {
         name: None,
-        script: "ALTER TABLE bar ADD id uuid;",
+        script: "ALTER TABLE account ADD disabled boolean NOT NULL DEFAULT FALSE;",
     },
     Migration {
         name: None,
-        script: "CREATE INDEX ON foo USING hash (value);",
+        script: "CREATE INDEX ON account USING hash (value);",
     },
 ];
 "#

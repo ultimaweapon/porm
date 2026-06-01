@@ -11,4 +11,4 @@ porm-macros = { version = "=0.1.0", path = "macros" }
 tokio-postgres = "0.7.17"
 
 [workspace]
-members = ["example", "macros", "parser"]
+members = ["config", "example", "macros", "parser"]

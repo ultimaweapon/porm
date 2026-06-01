@@ -4,17 +4,19 @@
 pub use self::error::*;
 
 use self::migration::Migration;
-use self::model::{Field, Index, IndexMember, Model};
+use self::model::{Field, ForeignKey, Index, IndexMember, Model, RefType, Reference};
 use self::ty::Type;
 use self::writer::Writer;
 use heck::AsUpperCamelCase;
 use memchr::Memchr;
 use pg_query::protobuf::{
-    AlterTableStmt, AlterTableType, ColumnDef, ConstrType, CreateStmt, IndexStmt,
+    AlterTableStmt, AlterTableType, ColumnDef, ConstrType, Constraint, CreateStmt, IndexStmt,
 };
 use pg_query::{Node, NodeEnum};
+use porm_config::Config;
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::fs::File;
@@ -44,6 +46,7 @@ mod writer;
 /// # Panics
 /// If `f` returns a duplicated identifier.
 pub fn parse_for_build_script<K>(
+    config: &Config,
     migrations: impl AsRef<str>,
     mut f: impl FnMut(&Path) -> Result<K, Box<dyn std::error::Error>>,
 ) -> Result<(), ParseError>
@@ -96,7 +99,7 @@ where
     // Parse.
     let files = files.into_values();
 
-    parse(&mut out, files)?;
+    parse(&mut out, config, files)?;
 
     out.flush().map_err(ParseError::WriteCode)?;
 
@@ -111,7 +114,11 @@ where
 /// The order of items produced by `migrations` must be the same every time.
 ///
 /// Use [parse_for_build_script()] instead if you are calling from build.rs.
-pub fn parse<M>(out: impl Write, migrations: impl IntoIterator<Item = M>) -> Result<(), ParseError>
+pub fn parse<M>(
+    out: impl Write,
+    config: &Config,
+    migrations: impl IntoIterator<Item = M>,
+) -> Result<(), ParseError>
 where
     M: Migration,
 {
@@ -119,6 +126,7 @@ where
     let scripts = migrations.into_iter();
     let mut migrations = Vec::new();
     let mut models = FxHashMap::default();
+    let mut foreign_keys = Vec::new();
 
     for (version, migration) in scripts.enumerate() {
         // Get migration.
@@ -143,7 +151,9 @@ where
 
             // Set up parse context.
             let mut cx = Context {
+                migration: version,
                 models: &mut models,
+                foreign_keys: &mut foreign_keys,
                 script: &script,
                 stmt_location: stmt.stmt_location,
             };
@@ -164,7 +174,113 @@ where
         migrations.push((name, script));
     }
 
-    generate(migrations, models, out).map_err(ParseError::WriteCode)
+    // Process foreign keys.
+    for fk in foreign_keys {
+        let n = fk.node;
+        let l = n.location;
+
+        if let Err(e) = apply_foreign_key(&models, fk.table, n) {
+            let version = fk.migration;
+            let (name, script) = &migrations[version];
+            let ln = location_to_ln(script, l);
+
+            return Err(ParseError::TableConstraint(name.clone(), version, ln, e));
+        }
+    }
+
+    generate(config, migrations, models, out).map_err(ParseError::WriteCode)
+}
+
+fn apply_foreign_key(
+    models: &FxHashMap<String, RefCell<Model>>,
+    table: String,
+    node: Box<Constraint>,
+) -> Result<(), ConstraintError> {
+    // Get referenced table.
+    let rm = node.pktable.unwrap().relname;
+    let rm = match models.get(&rm) {
+        Some(v) => v,
+        None => return Err(ConstraintError::UnknownTable(rm)),
+    };
+
+    // Load source columns.
+    let mut columns = Vec::with_capacity(node.fk_attrs.len());
+
+    for n in node.fk_attrs.into_iter().map(|n| n.node.unwrap()) {
+        match n {
+            NodeEnum::String(s) => columns.push(s.sval),
+            _ => unreachable!(),
+        }
+    }
+
+    // Check our primary key.
+    let m = models[&table].borrow_mut();
+    let mut ty = None;
+
+    for i in 0.. {
+        match (columns.get(i), m.primary_key.get(i)) {
+            (None, None) => {
+                // Columns and PK match exactly.
+                ty = Some(RefType::OneToOne);
+                break;
+            }
+            (None, Some(_)) => {
+                // PK longer than columns.
+                ty = Some(RefType::OneToMany);
+                break;
+            }
+            (Some(_), None) => {
+                // Nunber of columns longer than PK.
+                break;
+            }
+            (Some(c), Some(k)) => {
+                // Stop if column does not match with PK.
+                if c != k {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Check our indexes.
+    if ty != Some(RefType::OneToOne) {
+        // No matching PK or one-to-many. Scan our indexes for one-to-one.
+        'b: for idx in &m.indexes {
+            for i in 0.. {
+                match (columns.get(i), idx.columns.get(i)) {
+                    (None, None) => {
+                        // Columns and index match exactly.
+                        if idx.unique {
+                            ty = Some(RefType::OneToOne);
+                            break 'b; // No need to check remaining indexes.
+                        }
+
+                        ty = Some(RefType::OneToMany);
+                        break;
+                    }
+                    (None, Some(_)) => {
+                        // Index longer than columns.
+                        ty = Some(RefType::OneToMany);
+                        break;
+                    }
+                    (Some(_), None) => {
+                        // Nunber of columns longer than index.
+                        break;
+                    }
+                    (Some(c), Some(k)) => {
+                        // Stop if column does not match with index.
+                        if *c != k.column {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    rm.borrow_mut().refs.push(Reference { table, ty });
+
+    Ok(())
 }
 
 fn parse_create_stmt(
@@ -184,7 +300,7 @@ fn parse_create_stmt(
 
     // Parse create statement.
     let defs = node.table_elts;
-    let mut model = Model::default();
+    let mut model = Model::new(table.clone());
 
     for def in defs {
         let def = match def.node {
@@ -203,7 +319,7 @@ fn parse_create_stmt(
             NodeEnum::Constraint(v) => {
                 let loc = v.location;
 
-                if let Err(e) = model.parse_table_constraint(v) {
+                if let Err(e) = model.parse_table_constraint(cx, v) {
                     return Some(Err(ParseError::TableConstraint(
                         mn.clone(),
                         mv,
@@ -228,7 +344,7 @@ fn parse_create_stmt(
         Entry::Vacant(e) => e,
     };
 
-    e.insert(model);
+    e.insert(model.into());
 
     Some(Ok(()))
 }
@@ -241,10 +357,13 @@ fn parse_alter_table_stmt(
 ) -> Option<Result<(), ParseError>> {
     // Get target model.
     let table = node.relation?.relname;
-    let model = match cx.models.get_mut(&table) {
+    let model = match cx.models.get(&table) {
         Some(v) => v,
         None => return Some(Err(ParseError::UnknownTable(mn.clone(), mv, table))),
     };
+
+    // Parse statement.
+    let mut model = model.borrow_mut();
 
     for cmd in node.cmds {
         let cmd = match cmd.node {
@@ -257,7 +376,7 @@ fn parse_alter_table_stmt(
                 Some(NodeEnum::ColumnDef(n)) => {
                     let loc = n.location;
 
-                    if let Err(e) = parse_column_def(model, n) {
+                    if let Err(e) = parse_column_def(&mut model, n) {
                         return Some(Err(ParseError::Column(mn.clone(), mv, cx.get_line(loc), e)));
                     }
                 }
@@ -278,12 +397,13 @@ fn parse_index_stmt(
 ) -> Option<Result<(), ParseError>> {
     // Get target model.
     let table = node.relation?.relname;
-    let model = match cx.models.get_mut(&table) {
+    let model = match cx.models.get(&table) {
         Some(v) => v,
         None => return Some(Err(ParseError::UnknownTable(mn.clone(), mv, table))),
     };
 
     // Parse columns.
+    let mut model = model.borrow_mut();
     let mut columns = Vec::with_capacity(node.index_params.len());
 
     for param in node.index_params {
@@ -394,8 +514,9 @@ fn parse_system_type(node: Node) -> Type {
 }
 
 fn generate(
+    config: &Config,
     migrations: Vec<(Option<String>, String)>,
-    models: FxHashMap<String, Model>,
+    models: FxHashMap<String, RefCell<Model>>,
     out: impl Write,
 ) -> Result<(), std::io::Error> {
     // Generate preamble.
@@ -411,8 +532,9 @@ fn generate(
     w.line("use tokio_postgres::{Error, GenericClient, Row};")?;
 
     // Write models.
-    for (table, m) in models {
-        let name = AsUpperCamelCase(&table);
+    for (t, m) in models {
+        let m = m.into_inner();
+        let name = AsUpperCamelCase(&t);
 
         w.blank_line()?;
         w.begin(format_args!(r#"pub struct {}"#, name))?;
@@ -435,6 +557,18 @@ fn generate(
             }
         }
 
+        for r in &m.refs {
+            let f = config.pluralizer.to_plural(&r.table);
+            let t = AsUpperCamelCase(&r.table);
+
+            w.begin(format_args!("pub {f}: "))?;
+
+            match r.ty {
+                Some(RefType::OneToOne) => w.end(format_args!("Option<{t}>,"))?,
+                Some(RefType::OneToMany) | None => w.end(format_args!("Vec<{t}>,"))?,
+            }
+        }
+
         w.decrease_indent();
         w.line(r#"}"#)?;
         w.blank_line()?;
@@ -451,7 +585,7 @@ fn generate(
         w.line("pub async fn create<T: GenericClient>(&self, client: &T) -> Result<(), Error> {")?;
 
         w.increase_indent();
-        w.begin(format_args!(r#"client.execute("INSERT INTO {table} ("#))?;
+        w.begin(format_args!(r#"client.execute("INSERT INTO {t} ("#))?;
 
         for (i, c) in m.fields.keys().enumerate() {
             if i != 0 {
@@ -508,7 +642,7 @@ fn generate(
             w.increase_indent();
             w.begin(format_args!(
                 r#"let r = client.query_opt("SELECT * FROM {} WHERE "#,
-                table
+                t
             ))?;
 
             for (i, c) in m.primary_key.iter().enumerate() {
@@ -599,7 +733,7 @@ fn generate(
             w.increase_indent();
 
             w.begin(format_args!(
-                r#"let f = client.query_raw("SELECT * FROM {table} WHERE"#
+                r#"let f = client.query_raw("SELECT * FROM {t} WHERE"#
             ))?;
 
             for (i, c) in cols.iter().enumerate() {
@@ -789,7 +923,7 @@ fn generate(
         // Write create for builder.
         w.blank_line()?;
 
-        generate_builder_create(&mut w, &name, &table, &m)?;
+        generate_builder_create(&mut w, &name, &t, &m)?;
 
         w.decrease_indent();
         w.line("}")?;
@@ -930,21 +1064,27 @@ where
     Ok(())
 }
 
+fn location_to_ln(script: &str, loc: i32) -> NonZero<u32> {
+    use std::ops::Index;
+
+    let loc = usize::try_from(loc).unwrap();
+    let script = script.as_bytes().index(..loc);
+    let ln = Memchr::new(b'\n', script).count() + 1;
+
+    ln.try_into().ok().and_then(NonZero::new).unwrap()
+}
+
 /// Context to parse migration scripts.
 struct Context<'a> {
-    models: &'a mut FxHashMap<String, Model>,
+    migration: usize,
+    models: &'a mut FxHashMap<String, RefCell<Model>>,
+    foreign_keys: &'a mut Vec<ForeignKey>,
     script: &'a str,
     stmt_location: i32,
 }
 
 impl<'a> Context<'a> {
     fn get_line(&self, loc: i32) -> NonZero<u32> {
-        use std::ops::Index;
-
-        let loc = usize::try_from(loc).unwrap();
-        let script = self.script.as_bytes().index(..loc);
-        let ln = Memchr::new(b'\n', script).count() + 1;
-
-        ln.try_into().ok().and_then(NonZero::new).unwrap()
+        location_to_ln(self.script, loc)
     }
 }

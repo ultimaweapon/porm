@@ -1,8 +1,14 @@
 use crate::parse;
+use porm_config::{Config, SimplePluralizer};
 use pretty_assertions::assert_str_eq;
 
 #[test]
 fn parse_with_valid() {
+    // Set up config.
+    let config = Config {
+        pluralizer: &SimplePluralizer,
+    };
+
     // Parse.
     let mut out = Vec::new();
     let migrations = [
@@ -13,7 +19,7 @@ fn parse_with_valid() {
         "CREATE INDEX ON account USING hash (value);",
     ];
 
-    parse(&mut out, migrations).unwrap();
+    parse(&mut out, &config, migrations).unwrap();
 
     // Check output.
     let out = String::from_utf8(out).unwrap();
@@ -34,6 +40,7 @@ pub struct Account<'a> {
     pub value: Option<i64>,
     pub desc: Option<Cow<'a, str>>,
     pub disabled: bool,
+    pub blogs: Vec<Blog>,
 }
 
 impl<'a> Account<'a> {

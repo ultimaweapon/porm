@@ -92,9 +92,9 @@ assert!(!post.published);
 - Supports downgrade migration.
 - Supports other databases.
 
-## Breaking changes in parser 0.2
+## Breaking changes in parser 0.3
 
-- `ParseError` now non-exhaustive.
+- `parse_for_build_script` and `parse` have additional parameter.
 
 ## License
 

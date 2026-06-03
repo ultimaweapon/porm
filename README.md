@@ -95,6 +95,14 @@ assert!(!post.published);
 ## Breaking changes in parser 0.3
 
 - `parse_for_build_script` and `parse` have additional parameter.
+- `ParseError` no longer have migration version on every variants.
+- Migration version will be become a migration name if `Migration::name` return `None`.
+
+## Breaking changes in 0.2
+
+- `Migration::name` no longer optional.
+- `Logger::run` has new signature.
+- `Error::ExecuteMigration` and `Error::UpdateVersion` has been updated.
 
 ## License
 

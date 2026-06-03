@@ -130,16 +130,16 @@ where
 
     for (version, migration) in scripts.enumerate() {
         // Get migration.
-        let name = migration.name();
+        let name = migration.name().unwrap_or_else(move || version.to_string());
         let script = match migration.read() {
             Ok(v) => v,
-            Err(e) => return Err(ParseError::ReadMigration(name, version, e)),
+            Err(e) => return Err(ParseError::ReadMigration(name, e)),
         };
 
         // Parse migration.
         let parsed = match pg_query::parse(&script) {
             Ok(v) => v,
-            Err(e) => return Err(ParseError::ParseMigration(name, version, e)),
+            Err(e) => return Err(ParseError::ParseMigration(name, e)),
         };
 
         for stmt in parsed.protobuf.stmts {
@@ -160,9 +160,9 @@ where
 
             // Process.
             let r = match node {
-                NodeEnum::CreateStmt(n) => parse_create_stmt(&mut cx, &name, version, n),
-                NodeEnum::AlterTableStmt(n) => parse_alter_table_stmt(&mut cx, &name, version, n),
-                NodeEnum::IndexStmt(n) => parse_index_stmt(&mut cx, &name, version, n),
+                NodeEnum::CreateStmt(n) => parse_create_stmt(&mut cx, &name, n),
+                NodeEnum::AlterTableStmt(n) => parse_alter_table_stmt(&mut cx, &name, n),
+                NodeEnum::IndexStmt(n) => parse_index_stmt(&mut cx, &name, n),
                 _ => continue,
             };
 
@@ -184,7 +184,7 @@ where
             let (name, script) = &migrations[version];
             let ln = location_to_ln(script, l);
 
-            return Err(ParseError::TableConstraint(name.clone(), version, ln, e));
+            return Err(ParseError::TableConstraint(name.clone(), ln, e));
         }
     }
 
@@ -285,8 +285,7 @@ fn apply_foreign_key(
 
 fn parse_create_stmt(
     cx: &mut Context,
-    mn: &Option<String>,
-    mv: usize,
+    mn: &String,
     node: CreateStmt,
 ) -> Option<Result<(), ParseError>> {
     use std::collections::hash_map::Entry;
@@ -295,7 +294,7 @@ fn parse_create_stmt(
     let table = node.relation.map(|v| v.relname)?;
 
     if table.chars().any(|c| c.is_uppercase()) {
-        return Some(Err(ParseError::UnsupportedTableName(mn.clone(), mv, table)));
+        return Some(Err(ParseError::UnsupportedTableName(mn.clone(), table)));
     }
 
     // Parse create statement.
@@ -313,7 +312,7 @@ fn parse_create_stmt(
                 let loc = v.location;
 
                 if let Err(e) = parse_column_def(&mut model, v) {
-                    return Some(Err(ParseError::Column(mn.clone(), mv, cx.get_line(loc), e)));
+                    return Some(Err(ParseError::Column(mn.clone(), cx.get_line(loc), e)));
                 }
             }
             NodeEnum::Constraint(v) => {
@@ -322,7 +321,6 @@ fn parse_create_stmt(
                 if let Err(e) = model.parse_table_constraint(cx, v) {
                     return Some(Err(ParseError::TableConstraint(
                         mn.clone(),
-                        mv,
                         cx.get_line(loc),
                         e,
                     )));
@@ -337,7 +335,6 @@ fn parse_create_stmt(
         Entry::Occupied(e) => {
             return Some(Err(ParseError::DuplicatedTable(
                 mn.clone(),
-                mv,
                 e.key().clone(),
             )));
         }
@@ -351,15 +348,14 @@ fn parse_create_stmt(
 
 fn parse_alter_table_stmt(
     cx: &mut Context,
-    mn: &Option<String>,
-    mv: usize,
+    mn: &String,
     node: AlterTableStmt,
 ) -> Option<Result<(), ParseError>> {
     // Get target model.
     let table = node.relation?.relname;
     let model = match cx.models.get(&table) {
         Some(v) => v,
-        None => return Some(Err(ParseError::UnknownTable(mn.clone(), mv, table))),
+        None => return Some(Err(ParseError::UnknownTable(mn.clone(), table))),
     };
 
     // Parse statement.
@@ -377,7 +373,7 @@ fn parse_alter_table_stmt(
                     let loc = n.location;
 
                     if let Err(e) = parse_column_def(&mut model, n) {
-                        return Some(Err(ParseError::Column(mn.clone(), mv, cx.get_line(loc), e)));
+                        return Some(Err(ParseError::Column(mn.clone(), cx.get_line(loc), e)));
                     }
                 }
                 _ => continue,
@@ -391,15 +387,14 @@ fn parse_alter_table_stmt(
 
 fn parse_index_stmt(
     cx: &mut Context,
-    mn: &Option<String>,
-    mv: usize,
+    mn: &String,
     node: Box<IndexStmt>,
 ) -> Option<Result<(), ParseError>> {
     // Get target model.
     let table = node.relation?.relname;
     let model = match cx.models.get(&table) {
         Some(v) => v,
-        None => return Some(Err(ParseError::UnknownTable(mn.clone(), mv, table))),
+        None => return Some(Err(ParseError::UnknownTable(mn.clone(), table))),
     };
 
     // Parse columns.
@@ -418,7 +413,6 @@ fn parse_index_stmt(
         if !model.fields.contains_key(&column) {
             return Some(Err(ParseError::UnknownColumn(
                 mn.clone(),
-                mv,
                 cx.get_line(cx.stmt_location),
                 column,
             )));
@@ -515,7 +509,7 @@ fn parse_system_type(node: Node) -> Type {
 
 fn generate(
     config: &Config,
-    migrations: Vec<(Option<String>, String)>,
+    migrations: Vec<(String, String)>,
     models: FxHashMap<String, RefCell<Model>>,
     out: impl Write,
 ) -> Result<(), std::io::Error> {
@@ -940,28 +934,14 @@ fn generate(
     w.increase_indent();
 
     for (name, script) in migrations {
-        match name {
-            Some(name) => {
-                w.line("Migration {")?;
+        w.line("Migration {")?;
 
-                w.increase_indent();
-                w.line(format_args!("name: Some({}),", Literal::string(&name)))?;
-                w.line(format_args!("script: {},", Literal::string(&script)))?;
-                w.decrease_indent();
+        w.increase_indent();
+        w.line(format_args!("name: {},", Literal::string(&name)))?;
+        w.line(format_args!("script: {},", Literal::string(&script)))?;
+        w.decrease_indent();
 
-                w.line("},")?;
-            }
-            None => {
-                w.line("Migration {")?;
-
-                w.increase_indent();
-                w.line("name: None,")?;
-                w.line(format_args!("script: {},", Literal::string(&script)))?;
-                w.decrease_indent();
-
-                w.line("},")?;
-            }
-        }
+        w.line("},")?;
     }
 
     w.decrease_indent();

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Encapsulates migration script.
 pub trait Migration: Sized {
-    /// Returns name of this migration.
+    /// Returns name of this migration or [None] to use its version as a name.
     fn name(&self) -> Option<String>;
 
     /// Read all statements for the migration.

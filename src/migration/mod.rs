@@ -1,7 +1,7 @@
 //! Migration management.
 pub use self::logger::*;
 
-use std::fmt::{Display, Formatter};
+use thiserror::Error;
 use tokio_postgres::Client;
 use tokio_postgres::error::SqlState;
 
@@ -62,12 +62,12 @@ pub async fn migrate(
             None => break,
         };
 
-        logger.run(m.name, next);
+        logger.run(m.name);
 
         client
             .batch_execute(m.script)
             .await
-            .map_err(|e| Error::ExecuteMigration(m.name, next, e))?;
+            .map_err(|e| Error::ExecuteMigration(m.name, e))?;
 
         // Update version.
         let version = i32::try_from(next).unwrap();
@@ -75,7 +75,7 @@ pub async fn migrate(
         client
             .execute(&sql, &[&version, &m.name])
             .await
-            .map_err(|e| Error::UpdateVersion(m.name, next, e))?;
+            .map_err(|e| Error::UpdateVersion(m.name, e))?;
     }
 
     Ok(())
@@ -84,51 +84,27 @@ pub async fn migrate(
 /// Contains information for a migration.
 pub struct Migration {
     /// Name of migration.
-    pub name: Option<&'static str>,
+    pub name: &'static str,
     /// SQL statements for the migration.
     pub script: &'static str,
 }
 
 /// Reason when failed to apply SQL migrations.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
     /// Couldn't create table for migrations history.
-    CreateHistoryTable(tokio_postgres::Error),
+    #[error("couldn't create table for migrations history")]
+    CreateHistoryTable(#[source] tokio_postgres::Error),
     /// Couldn't query database version.
-    QueryVersion(tokio_postgres::Error),
+    #[error("couldn't query database version")]
+    QueryVersion(#[source] tokio_postgres::Error),
     /// Current database version is invalid.
+    #[error("current database version is invalid")]
     InvalidVersion,
     /// Couldn't execute migration.
-    ExecuteMigration(Option<&'static str>, usize, tokio_postgres::Error),
+    #[error("couldn't execute migration '{0}'")]
+    ExecuteMigration(&'static str, #[source] tokio_postgres::Error),
     /// Couldn't update database version.
-    UpdateVersion(Option<&'static str>, usize, tokio_postgres::Error),
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::CreateHistoryTable(e) => Some(e),
-            Self::QueryVersion(e) => Some(e),
-            Self::InvalidVersion => None,
-            Self::ExecuteMigration(_, _, e) => Some(e),
-            Self::UpdateVersion(_, _, e) => Some(e),
-        }
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::CreateHistoryTable(_) => {
-                write!(f, "couldn't create table for migrations history")
-            }
-            Self::QueryVersion(_) => f.write_str("couldn't query database version"),
-            Self::InvalidVersion => f.write_str("current database version is invalid"),
-            Self::ExecuteMigration(n, v, _) => match n {
-                Some(n) => write!(f, "couldn't execute migration {n}"),
-                None => write!(f, "couldn't execute migration for version {v}"),
-            },
-            Self::UpdateVersion(_, v, _) => write!(f, "couldn't update database version to {v}"),
-        }
-    }
+    #[error("couldn't update database version to {0}")]
+    UpdateVersion(&'static str, #[source] tokio_postgres::Error),
 }

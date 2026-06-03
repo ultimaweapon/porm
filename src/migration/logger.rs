@@ -9,7 +9,7 @@ pub trait Logger {
     fn start(&mut self, current: Option<usize>);
 
     /// Called before apply a migration.
-    fn run(&mut self, name: Option<&'static str>, version: usize);
+    fn run(&mut self, name: &'static str);
 }
 
 impl Logger for Stdout {
@@ -23,11 +23,8 @@ impl Logger for Stdout {
         }
     }
 
-    fn run(&mut self, name: Option<&'static str>, version: usize) {
-        match name {
-            Some(v) => writeln!(self, "Applying '{v}' for version {version}.").unwrap(),
-            None => writeln!(self, "Applying migration for version {version}.").unwrap(),
-        }
+    fn run(&mut self, name: &'static str) {
+        writeln!(self, "Applying migration {name}.").unwrap();
     }
 }
 
@@ -39,5 +36,5 @@ impl Logger for () {
     fn start(&mut self, _: Option<usize>) {}
 
     #[inline]
-    fn run(&mut self, _: Option<&'static str>, _: usize) {}
+    fn run(&mut self, _: &'static str) {}
 }

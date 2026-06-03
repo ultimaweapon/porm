@@ -6,14 +6,20 @@
 //! project and create `0.sql` in that directory for initial version of database schema.
 //!
 //! ## Create build scripts
-//! Add [porm-parser](https://crates.io/crates/porm-parser) as a build dependency and create
-//! `build.rs` with the following content:
+//! Add [porm-config](https://crates.io/crates/porm-config) and
+//! [porm-parser](https://crates.io/crates/porm-parser) as build dependencies and create `build.rs`
+//! with the following content:
 //!
 //! ```ignore
+//! use porm_config::{Config, SimplePluralizer};
 //! use porm_parser::parse_for_build_script;
 //!
 //! fn main() {
-//!     parse_for_build_script("PATH_TO_MIGRATION_SCRIPTS", |p| {
+//!     let config = Config {
+//!         pluralizer: &SimplePluralizer,
+//!     };
+//!
+//!     parse_for_build_script(&config, "PATH_TO_MIGRATION_SCRIPTS", |p| {
 //!         p.file_stem()
 //!             .unwrap()
 //!             .to_str()

@@ -1,13 +1,14 @@
 [package]
 name = "porm"
 description = "SQL first ORM for PostgreSQL"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ultimaweapon/porm"
 edition = "2024"
 
 [dependencies]
 porm-macros = { version = "=0.1.0", path = "macros" }
+thiserror = "2.0.18"
 tokio-postgres = "0.7.17"
 
 [workspace]

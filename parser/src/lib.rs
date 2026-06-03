@@ -285,7 +285,7 @@ fn apply_foreign_key(
 
 fn parse_create_stmt(
     cx: &mut Context,
-    mn: &String,
+    mn: &str,
     node: CreateStmt,
 ) -> Option<Result<(), ParseError>> {
     use std::collections::hash_map::Entry;
@@ -294,7 +294,7 @@ fn parse_create_stmt(
     let table = node.relation.map(|v| v.relname)?;
 
     if table.chars().any(|c| c.is_uppercase()) {
-        return Some(Err(ParseError::UnsupportedTableName(mn.clone(), table)));
+        return Some(Err(ParseError::UnsupportedTableName(mn.into(), table)));
     }
 
     // Parse create statement.
@@ -312,7 +312,7 @@ fn parse_create_stmt(
                 let loc = v.location;
 
                 if let Err(e) = parse_column_def(&mut model, v) {
-                    return Some(Err(ParseError::Column(mn.clone(), cx.get_line(loc), e)));
+                    return Some(Err(ParseError::Column(mn.into(), cx.get_line(loc), e)));
                 }
             }
             NodeEnum::Constraint(v) => {
@@ -320,7 +320,7 @@ fn parse_create_stmt(
 
                 if let Err(e) = model.parse_table_constraint(cx, v) {
                     return Some(Err(ParseError::TableConstraint(
-                        mn.clone(),
+                        mn.into(),
                         cx.get_line(loc),
                         e,
                     )));
@@ -333,10 +333,7 @@ fn parse_create_stmt(
     // Check if exists.
     let e = match cx.models.entry(table) {
         Entry::Occupied(e) => {
-            return Some(Err(ParseError::DuplicatedTable(
-                mn.clone(),
-                e.key().clone(),
-            )));
+            return Some(Err(ParseError::DuplicatedTable(mn.into(), e.key().clone())));
         }
         Entry::Vacant(e) => e,
     };
@@ -348,14 +345,14 @@ fn parse_create_stmt(
 
 fn parse_alter_table_stmt(
     cx: &mut Context,
-    mn: &String,
+    mn: &str,
     node: AlterTableStmt,
 ) -> Option<Result<(), ParseError>> {
     // Get target model.
     let table = node.relation?.relname;
     let model = match cx.models.get(&table) {
         Some(v) => v,
-        None => return Some(Err(ParseError::UnknownTable(mn.clone(), table))),
+        None => return Some(Err(ParseError::UnknownTable(mn.into(), table))),
     };
 
     // Parse statement.
@@ -373,7 +370,7 @@ fn parse_alter_table_stmt(
                     let loc = n.location;
 
                     if let Err(e) = parse_column_def(&mut model, n) {
-                        return Some(Err(ParseError::Column(mn.clone(), cx.get_line(loc), e)));
+                        return Some(Err(ParseError::Column(mn.into(), cx.get_line(loc), e)));
                     }
                 }
                 _ => continue,
@@ -387,14 +384,14 @@ fn parse_alter_table_stmt(
 
 fn parse_index_stmt(
     cx: &mut Context,
-    mn: &String,
+    mn: &str,
     node: Box<IndexStmt>,
 ) -> Option<Result<(), ParseError>> {
     // Get target model.
     let table = node.relation?.relname;
     let model = match cx.models.get(&table) {
         Some(v) => v,
-        None => return Some(Err(ParseError::UnknownTable(mn.clone(), table))),
+        None => return Some(Err(ParseError::UnknownTable(mn.into(), table))),
     };
 
     // Parse columns.
@@ -412,7 +409,7 @@ fn parse_index_stmt(
 
         if !model.fields.contains_key(&column) {
             return Some(Err(ParseError::UnknownColumn(
-                mn.clone(),
+                mn.into(),
                 cx.get_line(cx.stmt_location),
                 column,
             )));

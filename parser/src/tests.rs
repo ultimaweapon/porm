@@ -75,6 +75,15 @@ impl<'a> Account<'a> {
     }
 }
 
+pub struct AccountQuery {
+}
+
+impl AccountQuery {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
 pub struct AccountBuilder<'a> {
     id: Option<i32>,
     value: Option<Option<i64>>,
@@ -166,6 +175,15 @@ impl Blog {
     }
 }
 
+pub struct BlogQuery {
+}
+
+impl BlogQuery {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
 pub struct BlogBuilder {
     id: Option<i32>,
     owner: i32,
@@ -222,6 +240,15 @@ impl FooBar {
         let baz = r.try_get::<_, Option<SystemTime>>("baz")?;
 
         Ok(Self { baz })
+    }
+}
+
+pub struct FooBarQuery {
+}
+
+impl FooBarQuery {
+    pub fn new() -> Self {
+        Self {}
     }
 }
 

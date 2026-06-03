@@ -260,23 +260,23 @@ impl FooBarBuilder {
 
 pub static MIGRATIONS: [Migration; 5] = [
     Migration {
-        name: None,
+        name: "0",
         script: "CREATE TABLE account (id serial NOT NULL, value bigint, \"desc\" text, PRIMARY KEY (id));",
     },
     Migration {
-        name: None,
+        name: "1",
         script: "CREATE TABLE blog (id serial NOT NULL, owner integer NOT NULL, FOREIGN KEY (owner) REFERENCES account (id));",
     },
     Migration {
-        name: None,
+        name: "2",
         script: "CREATE TABLE foo_bar (\"baz\" timestamp with time zone);",
     },
     Migration {
-        name: None,
+        name: "3",
         script: "ALTER TABLE account ADD disabled boolean NOT NULL DEFAULT FALSE;",
     },
     Migration {
-        name: None,
+        name: "4",
         script: "CREATE INDEX ON account USING hash (value);",
     },
 ];

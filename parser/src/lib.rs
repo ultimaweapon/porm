@@ -191,10 +191,10 @@ fn apply_foreign_key(
     node: Box<Constraint>,
 ) -> Result<(), ConstraintError> {
     // Get referenced table.
-    let rm = node.pktable.unwrap().relname;
-    let rm = match models.get(&rm) {
+    let rt = node.pktable.unwrap().relname;
+    let rm = match models.get(&rt) {
         Some(v) => v,
-        None => return Err(ConstraintError::UnknownTable(rm)),
+        None => return Err(ConstraintError::UnknownTable(rt)),
     };
 
     // Load source columns.
@@ -207,8 +207,8 @@ fn apply_foreign_key(
         }
     }
 
-    // Check target primary key.
-    let m = models[&table].borrow_mut();
+    // Check our primary key.
+    let mut m = models[&table].borrow_mut();
     let mut ty = None;
 
     for i in 0.. {
@@ -282,7 +282,17 @@ fn apply_foreign_key(
         }
     }
 
-    rm.borrow_mut().refs.push(Reference {
+    // Add reference.
+    let mut rm = rm.borrow_mut();
+
+    m.refs.push(Reference {
+        table: rt,
+        columns: target.clone(),
+        target: columns.clone(),
+        ty: Some(RefType::OneToOne),
+    });
+
+    rm.refs.push(Reference {
         table,
         columns,
         target,
@@ -531,8 +541,8 @@ fn generate(
     w.line("use tokio_postgres::{Error, GenericClient, Row};")?;
 
     // Write models.
-    for (t, m) in models {
-        let m = m.into_inner();
+    for (t, m) in &models {
+        let m = m.borrow();
         let name = AsUpperCamelCase(&t);
 
         w.blank_line()?;
@@ -761,14 +771,24 @@ fn generate(
             w.blank_line()?;
 
             match r.ty {
-                Some(RefType::OneToOne) => generate_fetch_onetoone(&mut w, r)?,
+                Some(RefType::OneToOne) => generate_fetch_onetoone(&mut w, r, &models)?,
                 Some(RefType::OneToMany) | None => generate_fetch_onetomany(&mut w, r)?,
             }
         }
 
         // Write from_row method.
         w.blank_line()?;
-        w.line("fn from_row(r: Row) -> Result<Self, Error> {")?;
+
+        if m.has_lifetime {
+            w.line(format_args!(
+                "fn from_row(r: Row) -> Result<{name}<'static>, Error> {{"
+            ))?;
+        } else {
+            w.line(format_args!(
+                "fn from_row(r: Row) -> Result<{name}, Error> {{"
+            ))?;
+        }
+
         w.increase_indent();
 
         for (c, f) in &m.fields {
@@ -790,7 +810,7 @@ fn generate(
         }
 
         w.blank_line()?;
-        w.begin(r#"Ok(Self { "#)?;
+        w.begin(format_args!("Ok({name} {{ "))?;
 
         for (i, (n, f)) in m.fields.iter().enumerate() {
             if i != 0 {
@@ -976,13 +996,70 @@ fn generate(
 fn generate_fetch_onetoone<T: Write>(
     w: &mut Writer<T>,
     r: &Reference,
+    models: &FxHashMap<String, RefCell<Model>>,
 ) -> Result<(), std::io::Error> {
-    let t = &r.table;
-    let m = AsUpperCamelCase(&r.table);
+    let m = models[&r.table].borrow();
 
-    w.line(format_args!("pub async fn fetch_{t}<T: GenericClient>(&self, client: &T) -> Result<Option<{m}>, Error> {{"))?;
+    w.begin(format_args!(
+        "pub async fn fetch_{}<T: GenericClient>(&self, client: &T) -> ",
+        r.table
+    ))?;
+
+    if m.has_lifetime {
+        w.end(format_args!(
+            "Result<Option<{}<'static>>, Error> {{",
+            AsUpperCamelCase(&r.table)
+        ))?;
+    } else {
+        w.end(format_args!(
+            "Result<Option<{}>, Error> {{",
+            AsUpperCamelCase(&r.table)
+        ))?;
+    }
+
     w.increase_indent();
-    w.line("todo!()")?;
+
+    // Execute query.
+    w.begin(format_args!(
+        r#"let r = client.query_opt("SELECT * FROM {} WHERE "#,
+        r.table
+    ))?;
+
+    for (i, c) in r.columns.iter().enumerate() {
+        if i != 0 {
+            w.append(" AND ")?;
+        }
+
+        w.append(format_args!("{} = ${}", c, i + 1))?;
+    }
+
+    w.append(r#"", &["#)?;
+
+    for (i, c) in r.target.iter().enumerate() {
+        if i != 0 {
+            w.append(", ")?;
+        }
+
+        w.append(format_args!("&self.{c}"))?;
+    }
+
+    w.end("]).await?;")?;
+
+    // Check result.
+    w.line("let r = match r {")?;
+    w.increase_indent();
+    w.line("Some(v) => v,")?;
+    w.line("None => return Ok(None),")?;
+    w.decrease_indent();
+    w.line("};")?;
+
+    // Map.
+    w.blank_line()?;
+    w.line(format_args!(
+        "{}::from_row(r).map(Some)",
+        AsUpperCamelCase(&r.table)
+    ))?;
+
     w.decrease_indent();
     w.line("}")?;
 

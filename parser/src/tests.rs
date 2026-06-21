@@ -64,13 +64,13 @@ impl<'a> Account<'a> {
         Ok(Box::pin(f))
     }
 
-    fn from_row(r: Row) -> Result<Self, Error> {
+    fn from_row(r: Row) -> Result<Account<'static>, Error> {
         let id = r.try_get::<_, i32>("id")?;
         let value = r.try_get::<_, Option<i64>>("value")?;
         let desc = r.try_get::<_, Option<String>>("desc")?;
         let disabled = r.try_get::<_, bool>("disabled")?;
 
-        Ok(Self { id, value, desc: desc.map(Cow::Owned), disabled })
+        Ok(Account { id, value, desc: desc.map(Cow::Owned), disabled })
     }
 }
 
@@ -166,11 +166,21 @@ impl Blog {
         Ok(())
     }
 
-    fn from_row(r: Row) -> Result<Self, Error> {
+    pub async fn fetch_account<T: GenericClient>(&self, client: &T) -> Result<Option<Account<'static>>, Error> {
+        let r = client.query_opt("SELECT * FROM account WHERE id = $1", &[&self.owner]).await?;
+        let r = match r {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        Account::from_row(r).map(Some)
+    }
+
+    fn from_row(r: Row) -> Result<Blog, Error> {
         let id = r.try_get::<_, i32>("id")?;
         let owner = r.try_get::<_, i32>("owner")?;
 
-        Ok(Self { id, owner })
+        Ok(Blog { id, owner })
     }
 }
 
@@ -235,10 +245,10 @@ impl FooBar {
         Ok(())
     }
 
-    fn from_row(r: Row) -> Result<Self, Error> {
+    fn from_row(r: Row) -> Result<FooBar, Error> {
         let baz = r.try_get::<_, Option<SystemTime>>("baz")?;
 
-        Ok(Self { baz })
+        Ok(FooBar { baz })
     }
 }
 

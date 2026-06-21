@@ -10,6 +10,8 @@ pub struct ForeignKey {
 /// Contains data for a reference to the table.
 pub struct Reference {
     pub table: String,
+    pub columns: Vec<String>,
+    pub target: Vec<String>,
     pub ty: Option<RefType>,
 }
 

@@ -12,4 +12,4 @@ thiserror = "2.0.18"
 tokio-postgres = "0.7.17"
 
 [workspace]
-members = ["config", "example", "macros", "parser"]
+members = ["example", "macros", "parser"]

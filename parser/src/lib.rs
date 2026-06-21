@@ -13,7 +13,6 @@ use pg_query::protobuf::{
     AlterTableStmt, AlterTableType, ColumnDef, ConstrType, Constraint, CreateStmt, IndexStmt,
 };
 use pg_query::{Node, NodeEnum};
-use porm_config::Config;
 use proc_macro2::Literal;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -46,7 +45,6 @@ mod writer;
 /// # Panics
 /// If `f` returns a duplicated identifier.
 pub fn parse_for_build_script<K>(
-    config: &Config,
     migrations: impl AsRef<str>,
     mut f: impl FnMut(&Path) -> Result<K, Box<dyn std::error::Error>>,
 ) -> Result<(), ParseError>
@@ -99,7 +97,7 @@ where
     // Parse.
     let files = files.into_values();
 
-    parse(&mut out, config, files)?;
+    parse(&mut out, files)?;
 
     out.flush().map_err(ParseError::WriteCode)?;
 
@@ -114,11 +112,7 @@ where
 /// The order of items produced by `migrations` must be the same every time.
 ///
 /// Use [parse_for_build_script()] instead if you are calling from build.rs.
-pub fn parse<M>(
-    out: impl Write,
-    config: &Config,
-    migrations: impl IntoIterator<Item = M>,
-) -> Result<(), ParseError>
+pub fn parse<M>(out: impl Write, migrations: impl IntoIterator<Item = M>) -> Result<(), ParseError>
 where
     M: Migration,
 {
@@ -188,7 +182,7 @@ where
         }
     }
 
-    generate(config, migrations, models, out).map_err(ParseError::WriteCode)
+    generate(migrations, models, out).map_err(ParseError::WriteCode)
 }
 
 fn apply_foreign_key(
@@ -213,7 +207,7 @@ fn apply_foreign_key(
         }
     }
 
-    // Check our primary key.
+    // Check target primary key.
     let m = models[&table].borrow_mut();
     let mut ty = None;
 
@@ -278,7 +272,22 @@ fn apply_foreign_key(
         }
     }
 
-    rm.borrow_mut().refs.push(Reference { table, ty });
+    // Load referenced columns.
+    let mut target = Vec::new();
+
+    for n in node.pk_attrs.into_iter().map(|v| v.node.unwrap()) {
+        match n {
+            NodeEnum::String(s) => target.push(s.sval),
+            _ => unreachable!(),
+        }
+    }
+
+    rm.borrow_mut().refs.push(Reference {
+        table,
+        columns,
+        target,
+        ty,
+    });
 
     Ok(())
 }
@@ -505,7 +514,6 @@ fn parse_system_type(node: Node) -> Type {
 }
 
 fn generate(
-    config: &Config,
     migrations: Vec<(String, String)>,
     models: FxHashMap<String, RefCell<Model>>,
     out: impl Write,
@@ -545,18 +553,6 @@ fn generate(
                 w.end(format_args!(r#"Option<{}>,"#, f.ty.for_field()))?;
             } else {
                 w.end(format_args!(r#"{},"#, f.ty.for_field()))?;
-            }
-        }
-
-        for r in &m.refs {
-            let f = config.pluralizer.to_plural(&r.table);
-            let t = AsUpperCamelCase(&r.table);
-
-            w.begin(format_args!("pub {f}: "))?;
-
-            match r.ty {
-                Some(RefType::OneToOne) => w.end(format_args!("Option<{t}>,"))?,
-                Some(RefType::OneToMany) | None => w.end(format_args!("Vec<{t}>,"))?,
             }
         }
 
@@ -758,6 +754,16 @@ fn generate(
 
             w.decrease_indent();
             w.line("}")?;
+        }
+
+        // Write methods to load referenced table.
+        for r in &m.refs {
+            w.blank_line()?;
+
+            match r.ty {
+                Some(RefType::OneToOne) => generate_fetch_onetoone(&mut w, r)?,
+                Some(RefType::OneToMany) | None => generate_fetch_onetomany(&mut w, r)?,
+            }
         }
 
         // Write from_row method.
@@ -967,15 +973,71 @@ fn generate(
     Ok(())
 }
 
-fn generate_builder_create<T>(
+fn generate_fetch_onetoone<T: Write>(
+    w: &mut Writer<T>,
+    r: &Reference,
+) -> Result<(), std::io::Error> {
+    let t = &r.table;
+    let m = AsUpperCamelCase(&r.table);
+
+    w.line(format_args!("pub async fn fetch_{t}<T: GenericClient>(&self, client: &T) -> Result<Option<{m}>, Error> {{"))?;
+    w.increase_indent();
+    w.line("todo!()")?;
+    w.decrease_indent();
+    w.line("}")?;
+
+    Ok(())
+}
+
+fn generate_fetch_onetomany<T: Write>(
+    w: &mut Writer<T>,
+    r: &Reference,
+) -> Result<(), std::io::Error> {
+    let t = &r.table;
+    let m = AsUpperCamelCase(&r.table);
+
+    w.line(format_args!("pub async fn fetch_{t}<T: GenericClient>(&self, client: &T) -> Result<Pin<Box<impl Stream<Item = Result<{m}, Error>>>>, Error> {{"))?;
+    w.increase_indent();
+
+    w.begin(format_args!(
+        r#"let f = client.query_raw("SELECT * FROM {t} WHERE "#
+    ))?;
+
+    for (i, c) in r.columns.iter().enumerate() {
+        if i != 0 {
+            w.append(" AND ")?;
+        }
+
+        w.append(format_args!("{} = ${}", c, i + 1))?;
+    }
+
+    w.append(r#"", ["#)?;
+
+    for (i, c) in r.target.iter().enumerate() {
+        if i != 0 {
+            w.append(", ")?;
+        }
+
+        w.append(format_args!("&self.{c}"))?;
+    }
+
+    w.end(format_args!("]).await?.and_then(|r| {m}::from_row(r).map_or_else(futures::future::err, futures::future::ok));"))?;
+
+    w.blank_line()?;
+    w.line("Ok(Box::pin(f))")?;
+
+    w.decrease_indent();
+    w.line("}")?;
+
+    Ok(())
+}
+
+fn generate_builder_create<T: Write>(
     w: &mut Writer<T>,
     name: impl Display,
     table: &str,
     model: &Model,
-) -> Result<(), std::io::Error>
-where
-    T: Write,
-{
+) -> Result<(), std::io::Error> {
     if model.has_lifetime {
         w.line(format_args!(
             "pub async fn create<T: GenericClient>(&self, client: &T) -> Result<{}<'static>, Error> {{",

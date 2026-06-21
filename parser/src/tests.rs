@@ -1,14 +1,8 @@
 use crate::parse;
-use porm_config::{Config, SimplePluralizer};
 use pretty_assertions::assert_str_eq;
 
 #[test]
 fn parse_with_valid() {
-    // Set up config.
-    let config = Config {
-        pluralizer: &SimplePluralizer,
-    };
-
     // Parse.
     let mut out = Vec::new();
     let migrations = [
@@ -19,7 +13,7 @@ fn parse_with_valid() {
         "CREATE INDEX ON account USING hash (value);",
     ];
 
-    parse(&mut out, &config, migrations).unwrap();
+    parse(&mut out, migrations).unwrap();
 
     // Check output.
     let out = String::from_utf8(out).unwrap();
@@ -40,7 +34,6 @@ pub struct Account<'a> {
     pub value: Option<i64>,
     pub desc: Option<Cow<'a, str>>,
     pub disabled: bool,
-    pub blogs: Vec<Blog>,
 }
 
 impl<'a> Account<'a> {
@@ -61,6 +54,12 @@ impl<'a> Account<'a> {
 
     pub async fn select_by_value<T: GenericClient>(client: &T, value: Option<i64>) -> Result<Pin<Box<impl Stream<Item = Result<Self, Error>> + use<'a, T>>>, Error> {
         let f = client.query_raw("SELECT * FROM account WHERE value = $1", [&value]).await?.and_then(|r| Self::from_row(r).map_or_else(futures::future::err, futures::future::ok));
+
+        Ok(Box::pin(f))
+    }
+
+    pub async fn fetch_blog<T: GenericClient>(&self, client: &T) -> Result<Pin<Box<impl Stream<Item = Result<Blog, Error>>>>, Error> {
+        let f = client.query_raw("SELECT * FROM blog WHERE owner = $1", [&self.id]).await?.and_then(|r| Blog::from_row(r).map_or_else(futures::future::err, futures::future::ok));
 
         Ok(Box::pin(f))
     }

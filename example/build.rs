@@ -1,12 +1,7 @@
-use porm_config::{Config, SimplePluralizer};
 use porm_parser::parse_for_build_script;
 
 fn main() {
-    let config = Config {
-        pluralizer: &SimplePluralizer,
-    };
-
-    parse_for_build_script(&config, "sql", |p| {
+    parse_for_build_script("sql", |p| {
         p.file_stem()
             .unwrap()
             .to_str()

@@ -10,5 +10,4 @@ tokio = { version = "1.52.1", features = ["rt"] }
 tokio-postgres = "0.7.17"
 
 [build-dependencies]
-porm-config = { path = "../config" }
 porm-parser = { path = "../parser" }

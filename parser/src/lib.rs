@@ -960,7 +960,7 @@ fn generate(
         // Write create for builder.
         w.blank_line()?;
 
-        generate_builder_create(&mut w, &name, &t, &m)?;
+        generate_builder_create(&mut w, &name, t, &m)?;
 
         w.decrease_indent();
         w.line("}")?;

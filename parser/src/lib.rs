@@ -836,26 +836,6 @@ fn generate(
         w.decrease_indent();
         w.line("}")?;
 
-        // Write query struct.
-        w.blank_line()?;
-
-        w.line(format_args!("pub struct {name}Query {{"))?;
-        w.line("}")?;
-
-        w.blank_line()?;
-        w.line(format_args!("impl {name}Query {{"))?;
-        w.increase_indent();
-
-        // Write new for query.
-        w.line("pub fn new() -> Self {")?;
-        w.increase_indent();
-        w.line("Self {}")?;
-        w.decrease_indent();
-        w.line("}")?;
-
-        w.decrease_indent();
-        w.line("}")?;
-
         // Write builder struct.
         w.blank_line()?;
 
